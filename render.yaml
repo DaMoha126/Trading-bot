@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ben-bot-mt5
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: APP_PASSWORD
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production

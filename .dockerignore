@@ -1,0 +1,6 @@
+.git
+node_modules
+.env
+connector/risk_state.json
+connector/journal.jsonl
+**/__pycache__

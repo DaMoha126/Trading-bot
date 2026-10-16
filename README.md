@@ -1,4 +1,4 @@
-# Ben Bot V3 — hébergement indépendant
+# Trading Bot V3 — hébergement indépendant
 
 Interface mobile inspirée de la vidéo fournie : noir profond, titres et courbe dorés, état de connexion turquoise, bloc MT5 Account, étapes d'analyse et boutons Démarrer/Arrêter. Les valeurs restent absentes jusqu'à réception des données du compte démo. Aucune fausse animation de résultat.
 

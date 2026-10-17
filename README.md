@@ -1,32 +1,67 @@
-# Trading Bot V3 — hébergement indépendant
+# Trading Bot v4
 
-Interface mobile inspirée de la vidéo fournie : noir profond, titres et courbe dorés, état de connexion turquoise, bloc MT5 Account, étapes d'analyse et boutons Démarrer/Arrêter. Les valeurs restent absentes jusqu'à réception des données du compte démo. Aucune fausse animation de résultat.
+Poste de commande privé EUR/USD M3 et laboratoire de backtest. Le moteur MT5 tourne sur le PC Windows de l'utilisateur ; Render héberge l'interface et le relais HTTPS. Comptes MT5 de démonstration en USD uniquement.
 
-## Hébergement externe
+## Routes et composants
 
-Application Node 22 sans dépendance npm. `Dockerfile` et `render.yaml` inclus pour déploiement hors de ChatGPT Sites. Il faut un compte d'hébergement connecté et, selon la plateforme, un dépôt Git accessible. Aucun déploiement externe n'a été réalisé dans ce paquet.
+- `/control.html` : compte, cotations, Démarrer/Arrêter, supervision, positions, historique et exports.
+- `/api/bridge` : relais HTTPS authentifié vers le connecteur du PC. Aucun mot de passe MT5 demandé.
+- `/lab/index.html` : démo synthétique, import CSV, historique réel MT5, partage chronologique 70/30 et rapports simulés.
+- `connector/` : moteur démo, récupération des bougies et des exécutions, protections et tests avec faux terminal.
 
-Sur Render, utiliser le Blueprint `render.yaml` depuis le dépôt contenant ce dossier comme racine de l'application. Le mot de passe `APP_PASSWORD` et la clé `SESSION_SECRET` sont générés par l'hébergeur ; consulter la variable APP_PASSWORD dans son espace privé pour se connecter. Ne pas publier ces valeurs. Si l'application est dans un sous-dossier d'un dépôt existant, le choisir comme répertoire racine du service.
+## Liaison qui survit aux redémarrages du site
 
-Variables :
-- `APP_PASSWORD` : mot de passe privé, au moins 16 caractères, obligatoire.
-- `SESSION_SECRET` : clé aléatoire de session, recommandée pour préserver les connexions entre redémarrages.
-- `PUBLIC_URL` : origine HTTPS exacte facultative, à renseigner si l'hébergeur présente un domaine différent dans l'en-tête Host.
-- `PORT` : port fourni par l'hébergeur, 3000 par défaut.
-- `NODE_ENV=production` : cookies sécurisés HTTPS.
+L'URL et la clé du connecteur sont chiffrées avec AES-256-GCM et conservées dans un cookie HttpOnly, SameSite=Strict, Secure en HTTPS, valide 30 jours. Aucun secret n'est renvoyé dans les réponses JSON. La variable `SESSION_SECRET` doit rester stable sur Render. Les connexions au site durent 12 heures ; se reconnecter au site ne nécessite pas de relier le PC si le cookie de liaison reste valide.
 
-La liaison au connecteur est conservée en mémoire serveur : après redémarrage ou mise en veille du service, relier à nouveau le PC. Déployer une seule instance pour ces essais. Les offres qui mettent le service en veille ne conviennent pas à un fonctionnement sans surveillance. Le bot met les nouvelles entrées en pause après 25 secondes sans contact.
+La sauvegarde est propre à chaque navigateur/appareil. Un téléphone doit être relié une fois séparément. Effacer les cookies, changer `SESSION_SECRET` ou relancer le tunnel avec une nouvelle URL nécessite une nouvelle liaison. Il n'y a ni base payante ni synchronisation centrale multi-appareils.
 
-## Installation MT5
+Le serveur n'accepte que des endpoints HTTPS `*.trycloudflare.com`, sans redirection, ni chemin arbitraire. Le remplacement d'un ancien connecteur exige son arrêt confirmé ; si l'ancien PC est injoignable, la dissociation explicite prévient que le bot autonome peut encore tourner.
 
-Le ZIP du connecteur est disponible dans l'interface. L'extraire sur un PC Windows où Python 3.10+ et MT5 sont installés. Compte DEMO en USD uniquement. Ouvrir le nouveau site externe dans un navigateur après lancement du connecteur et y coller URL et clé de liaison. Le mot de passe MT5 reste dans le terminal.
+## Mode supervisé et mode autonome
 
-Le connecteur démarre à l'arrêt. Lancer le bot exige le bouton Démarrer. Arrêter suspend uniquement les nouvelles entrées ; stops et objectifs existants restent au courtier. PC, connecteur et tableau de bord doivent rester actifs.
+Le mode par défaut est supervisé : plus de 25 secondes sans contact du tableau de bord = pause des nouvelles entrées.
 
-## Essai local
+Cocher **Continuer quand le site est fermé** avant Démarrer active le mode autonome. Le PC, MT5 et le connecteur doivent rester allumés. Le moteur local poursuit les recherches et les contrôles du risque sans dépendre du navigateur ou de la veille de Render. Une coupure de tunnel peut empêcher l'arrêt distant ; arrêter le connecteur sur le PC si nécessaire. Les SL/TP existants restent chez le courtier.
 
-Définir APP_PASSWORD (au moins 16 caractères) puis `node server.mjs`. Ouvrir http://localhost:3000. Garder NODE_ENV différent de production pour cet essai HTTP local. Ne pas exposer de compte réel.
+Un redémarrage du connecteur ne relance jamais automatiquement les ordres. Compte changé, données périmées, réponse d'ordre incertaine ou limite quotidienne atteinte = arrêt/pause des nouvelles entrées. L'identifiant du dernier signal est écrit avant envoi pour éviter les renvois aveugles.
 
-## Vérifications
+## Historique et résultats nets
 
-Le moteur et le connecteur démo conservent les règles précédentes. Le test du serveur vérifie le refus sans authentification, l'ouverture de session, l'accès à l'interface, l'isolation des fichiers et les contrôles de la liaison. Aucun essai sur un terminal MT5 réel ni contrôle visuel dans un navigateur n'a été effectué ici.
+Le connecteur lit les deals MT5 sur 90 jours et reconstruit les positions du MagicNumber du bot. Les entrées et sorties partielles sont regroupées par identifiant de position. Une clôture manuelle d'une position du bot est incluse ; un ajout manuel à cette position ou un renversement la rend mixte et l'exclut des statistiques. Les doublons d'exécution sont dédupliqués par ticket.
+
+Le net comprend profit + commissions + swap + frais rattachés aux deals. Les commissions globales sans position associée ne peuvent pas être allouées. Les positions ouvertes et les historiques incomplets sont exclus du résultat réalisé. Les fenêtres peuvent manquer des opérations si le courtier limite son historique ; le logiciel ne reconstitue aucun prix manquant.
+
+Les 500 positions clôturées les plus récentes sont transmises à l'interface. La troncature éventuelle est signalée. Les métriques affichées et le CSV portent sur cette liste et le filtre de sens sélectionné. Le JSON contient aussi le bilan par jour et par sens calculé sur l'historique complet récupéré, avant cette limitation d'affichage.
+
+La courbe d'equity est relevée localement toutes les 30 secondes au plus et conserve 2 880 observations. Le fichier local est sauvegardé au plus toutes les 60 secondes : une extinction brutale peut perdre les derniers relevés, sans réinitialiser la limite de risque enregistrée séparément. La courbe représente des observations, pas une reconstitution de chaque tick.
+
+## Backtest réel via MT5
+
+Depuis l'historique, **Tester l'historique M3 du compte** ouvre le laboratoire sur la source MT5. Le connecteur exporte jusqu'à 10 000 bougies BID M3 clôturées. L'index 0 en formation est exclu. Une demande de bougies n'ouvre aucun ordre. Aucun repli silencieux vers des données artificielles si MT5 n'est pas disponible.
+
+Les exécutions et les coûts du backtest restent simulés. Configurer spread, glissement et commissions en cohérence avec le courtier. Le spread du CSV/MT5 est une différence de prix ASK−BID ; le réglage de spread de l'interface est une valeur de secours si la colonne est absente. L'évaluation des 30 % finaux utilise un compte et des indicateurs neufs, sans transfert d'une position de la période précédente.
+
+## Déploiement et secrets
+
+Node 22, sans dépendance npm. `Dockerfile` et `render.yaml` sont fournis. Le dépôt GitHub déclenche automatiquement Render.
+
+- `APP_PASSWORD` : mot de passe du site, au moins 16 caractères.
+- `SESSION_SECRET` : secret stable de signature/chiffrement.
+- `PUBLIC_URL` : origine publique HTTPS facultative, prioritaire si renseignée.
+- `RENDER_EXTERNAL_URL` : origine publique automatiquement fournie par Render, utilisée avant tout hôte interne du proxy.
+- `PORT` : fourni par l'hébergeur.
+
+La politique de référent `same-origin` préserve l'origine des formulaires tout en masquant les référents intersites. Les origines absentes, nulles ou étrangères sont refusées. Aucun secret ou état de compte ne doit être commis dans Git.
+
+## Tests exécutables
+
+```sh
+npm test
+python -m unittest discover -s connector -p 'test_*.py'
+```
+
+`npm test` vérifie chiffrement/persistance de la liaison, relais/version du connecteur, contrôle d'origine derrière HTTPS, sessions et accès privés, rendu logique du tableau de bord, et parité du backtest JavaScript avec la référence Python.
+
+Les tests Python utilisent un faux terminal et couvrent comptes réels/concours, risque, ordres uniques, reprises, modes supervisé/autonome, données invalides, exports de bougies, historique et relevés d'equity. Ils n'ont envoyé aucun ordre à un courtier.
+
+Voir `NIGHTLY_REPORT.md` pour la livraison du 16 octobre. La validation sur Windows, le tunnel réel du PC, l'historique réel de l'utilisateur et les exécutions du courtier restent à effectuer sur compte démo. Aucun test de rentabilité sur marché réel ni contrôle visuel dans un navigateur n'est revendiqué.

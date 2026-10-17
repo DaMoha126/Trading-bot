@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),fs=require('node:fs');const scope={module:{exports:{}},Date};require('node:vm').runInNewContext(fs.readFileSync('./public/lab/engine.js','utf8'),scope);const F=scope.module.exports;
+const {bars}=F.parseCSV(fs.readFileSync('./public/lab/demo.csv','utf8'));const r=F.run(bars,F.defaults);
+const py=JSON.parse(fs.readFileSync('./tests/python-summary.json','utf8'));
+assert.equal(r.stats.count,py.trades);assert.ok(Math.abs(r.stats.net-py.realized_net)<1e-8);assert.ok(Math.abs(r.stats.dd-py.max_drawdown)<1e-8);
+const pyTrades=fs.readFileSync('./tests/python-trades.csv','utf8').trim().split(/\r?\n/);const head=pyTrades.shift().split(',');pyTrades.forEach((line,i)=>{const x=Object.fromEntries(head.map((h,j)=>[h,line.split(',')[j]]));for(const k of ['entry','stop','target','units','pnl','opened','closed'])assert.ok(Math.abs(r.trades[i][k]-Number(x[k]))<1e-8,k);assert.equal(r.trades[i].reason,x.reason);});
+assert.throws(()=>F.parseCSV('time,open,high,low,close\n2026-01-05T00:00:00,1,1,1,1'),/fuseau/);
+assert.throws(()=>F.validateConfig({...F.defaults,risk:.5}),/risque/);
+const text=fs.readFileSync('./public/lab/demo.csv','utf8').trim();assert.equal(F.parseCSV(text+'\n'+text.split(/\r?\n/).at(-1)).duplicates,1);
+const oos=F.run(bars.slice(1680),F.defaults);assert.ok(oos.equity.length===720);
+console.log('Parity Python/JS: 16 transactions, prix/tailles/sorties/PnL/drawdown identiques. CSV, doublons, risque et split OK.');

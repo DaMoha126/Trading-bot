@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {join,resolve,extname} from 'node:path';
 import {handleBridge} from './lib/bridge-service.mjs';
 import {siteOrigin} from './lib/site-origin.mjs';
+import {connectionBucket} from './lib/connection-cookie.mjs';
 const root=resolve(fileURLToPath(new URL('./public',import.meta.url)));
 const password=process.env.APP_PASSWORD;
 if(!password||password.length<16)throw Error('Définir APP_PASSWORD avec au moins 16 caractères dans les variables de l’hébergeur.');
@@ -12,7 +13,7 @@ const secret=process.env.SESSION_SECRET||randomBytes(32).toString('hex');
 const hash=s=>createHash('sha256').update(s).digest();
 const equal=(a,b)=>timingSafeEqual(hash(a),hash(b));
 const hmac=s=>createHmac('sha256',secret).update(s).digest('hex');
-const connection=new Map();const bucket={get:async k=>connection.has(k)?{json:async()=>JSON.parse(connection.get(k))}:null,put:async(k,v)=>connection.set(k,v),delete:async k=>connection.delete(k)};
+// The encrypted HttpOnly pairing cookie survives server restarts with SESSION_SECRET.
 const limits=new Map();
 function session(req){const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('ben_session='))?.slice(12);if(!token)return false;const [expires,sig]=token.split('.');return !!sig&&Number(expires)>Date.now()&&equal(sig,hmac(expires));}
 const login=error=>`<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Trading Bot · Connexion</title><style>body{background:#040604;color:#dadbc6;font:14px system-ui;display:grid;min-height:90vh;place-items:center;margin:0}form{width:min(320px,80vw);padding:30px;border:1px solid #2d3520;border-radius:8px;background:#090d07}h1{color:#d8b95f;letter-spacing:3px;font-size:24px}p{color:#859174;font-size:12px;line-height:1.8}label{font-size:12px}input{box-sizing:border-box;display:block;width:100%;margin:12px 0 20px;background:#030602;color:#e7ecd8;padding:12px;border:1px solid #354627;border-radius:4px}button{width:100%;background:#3bdaae;color:#062c1d;padding:12px;border:0;border-radius:4px;font-weight:600}.error{color:#f2969d}</style><form method="post" action="/login"><h1>TRADING BOT</h1><p>Poste de commande privé<br>MetaTrader 5 · Compte démo</p>${error?'<p class="error">Mot de passe incorrect ou trop de tentatives.</p>':''}<label>Mot de passe du site<input name="password" type="password" required autocomplete="current-password" autofocus></label><button>Accéder au bot →</button><p>Utilise le mot de passe configuré chez ton hébergeur.</p></form></html>`;
@@ -33,7 +34,7 @@ const app=http.createServer(async(req,res)=>{const send=(status,data,headers={})
  }
  if(!session(req)){if(u.pathname.startsWith('/api/'))return send(401,JSON.stringify({error:'Connexion requise.'}),{'Content-Type':'application/json'});return send(303,'',{Location:'/login'});}
  if(u.pathname==='/api/bridge'){
-  const h=new Headers();h.set('oai-authenticated-user-id','owner');if(req.headers.origin)h.set('Origin',req.headers.origin);if(req.headers['content-type'])h.set('Content-Type',req.headers['content-type']);const r=await handleBridge(new Request(origin+'/api/bridge',{method:req.method,headers:h,body:req.method==='POST'?await body(req):undefined}),bucket);return send(r.status,Buffer.from(await r.arrayBuffer()),Object.fromEntries(r.headers));
+  const h=new Headers();h.set('oai-authenticated-user-id','owner');if(req.headers.origin)h.set('Origin',req.headers.origin);if(req.headers['content-type'])h.set('Content-Type',req.headers['content-type']);const bucket=connectionBucket(req,secret,origin.startsWith('https://'));const r=await handleBridge(new Request(origin+'/api/bridge',{method:req.method,headers:h,body:req.method==='POST'?await body(req):undefined}),bucket);const responseHeaders=Object.fromEntries(r.headers);if(bucket.cookie)responseHeaders['Set-Cookie']=bucket.cookie;return send(r.status,Buffer.from(await r.arrayBuffer()),responseHeaders);
  }
  if(!['GET','HEAD'].includes(req.method))return send(405,'Méthode refusée');
  const pathname=u.pathname==='/'?'/control.html':decodeURIComponent(u.pathname),file=resolve(root,'.'+pathname);if(!file.startsWith(root+'/'))return send(403,'Accès refusé');if(!(await stat(file)).isFile())return send(404,'Introuvable');return send(200,req.method==='HEAD'?'':await readFile(file),{'Content-Type':types[extname(file)]||'application/octet-stream'});

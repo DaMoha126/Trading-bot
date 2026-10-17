@@ -2,11 +2,12 @@
 from __future__ import annotations
 import argparse, hashlib, hmac, json, math, os, secrets, threading, time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_FLOOR
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from strategy import Config, Engine, Bar
+from trade_history import aggregate_deals, empty_history
 
 MAGIC=26101603
 STATE=Path(__file__).with_name('risk_state.json')
@@ -18,8 +19,17 @@ class DemoBridge:
         self.lock=threading.RLock();self.running=False;self.engine=None;self.symbol='EURUSD'
         self.cfg=Config();self.events=deque(maxlen=100);self.pin=None;self.last_error=''
         self.last_seen=0;self.last_quote=0;self.commands=deque(maxlen=200)
+        self.supervision='browser';self.history=empty_history();self.history_at=0;self.history_account=None
         self.risk=json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         self.last_signal=self.risk.get('last_signal')
+        self.equity_path=self.state_path.with_name(self.state_path.stem+'_equity.json')
+        self.equity_account=None;self.equity_points=deque(maxlen=2880);self.equity_saved=0
+        try:
+            saved=json.loads(self.equity_path.read_text())
+            pts=saved.get('points',[])
+            if all(isinstance(p,dict) and all(math.isfinite(float(p[k])) for k in ('time','equity')) for p in pts):
+                self.equity_account=saved.get('account');self.equity_points.extend(pts[-2880:])
+        except (OSError,ValueError,KeyError,TypeError):pass
     def log(self,event,**data):
         row=dict(time=time.time(),event=event,**data);self.events.append(row)
         with self.journal_path.open('a',encoding='utf8') as f:f.write(json.dumps(row,ensure_ascii=False)+'\n')
@@ -31,6 +41,7 @@ class DemoBridge:
         a=self.mt.account_info();terminal=self.mt.terminal_info()
         if a is None or terminal is None or not terminal.connected:raise ValueError('Terminal MT5 deconnecte.')
         if a.trade_mode!=self.mt.ACCOUNT_TRADE_MODE_DEMO:raise ValueError('Compte REEL ou concours refuse. Compte DEMO obligatoire.')
+        if not all(math.isfinite(float(getattr(a,k))) for k in ('equity','balance','margin_free')):raise ValueError('Valeurs de compte invalides.')
         if a.currency!='USD':raise ValueError('V1 : compte de demonstration en USD requis.')
         if self.pin and (a.login,a.server)!=self.pin:raise ValueError('Compte change : bot mis en pause. Reconnecter le compte initial.')
         return a
@@ -38,19 +49,72 @@ class DemoBridge:
         a=self.account();t=self.mt.terminal_info()
         if not a.trade_allowed or not a.trade_expert or not t.trade_allowed or getattr(t,'tradeapi_disabled',False):
             raise ValueError('Autoriser Algo Trading et le trading via API Python dans MT5.')
+        if a.equity<=0:raise ValueError('Capital de demonstration insuffisant.')
         return a
     def day_check(self,a):
         day=datetime.now(timezone.utc).date().isoformat();key=f'{a.login}@{a.server}'
-        if self.risk.get('day')!=day or self.risk.get('account')!=key:
-            self.risk.update(day=day,account=key,baseline=a.equity,halted=False);self.persist()
-        if a.equity<=self.risk['baseline']*(1-self.cfg.daily_loss)+1e-8 and not self.risk.get('halted'):
-            self.risk['halted']=True;self.persist();self.log('DAILY_HALT',equity=a.equity)
-        return bool(self.risk.get('halted'))
+        before=json.dumps(self.risk,sort_keys=True)
+        states=self.risk.setdefault('accounts',{})
+        if key not in states:
+            states[key]={k:self.risk[k] for k in ('day','baseline','halted') if k in self.risk} if self.risk.get('account')==key else {}
+        record=states[key]
+        if record.get('day')!=day:
+            record.update(day=day,baseline=a.equity,halted=False)
+        self.risk.update(day=record['day'],account=key,baseline=record['baseline'],halted=record.get('halted',False))
+        if a.equity<=record['baseline']*(1-self.cfg.daily_loss)+1e-8 and not record.get('halted'):
+            record['halted']=True;self.risk['halted']=True;self.log('DAILY_HALT',equity=a.equity)
+        if json.dumps(self.risk,sort_keys=True)!=before:self.persist()
+        return bool(record.get('halted'))
+    def record_equity(self,a):
+        identity=f'{a.login}@{a.server}';now=time.time()
+        if identity!=self.equity_account:
+            self.equity_account=identity;self.equity_points.clear();self.equity_saved=0
+        if self.equity_points and now-self.equity_points[-1]['time']<30:return
+        self.equity_points.append(dict(time=now,equity=a.equity))
+        if now-self.equity_saved>=60:
+            temp=self.equity_path.with_suffix('.tmp')
+            with temp.open('w') as f:json.dump(dict(account=identity,points=list(self.equity_points)),f,allow_nan=False);f.flush();os.fsync(f.fileno())
+            os.replace(temp,self.equity_path);self.equity_saved=now
+    def refresh_history(self,a,positions):
+        identity=(a.login,a.server)
+        if identity==self.history_account and time.time()-self.history_at<30:return
+        self.history_account=identity;self.history_at=time.time()
+        if not hasattr(self.mt,'history_deals_get'):
+            self.history=empty_history('unavailable','Historique non disponible sur cette source.');return
+        try:
+            now=datetime.now(timezone.utc);start=now-timedelta(days=90)
+            deals=self.mt.history_deals_get(start,now)
+            if deals is None:raise ValueError('Lecture de l historique MT5 indisponible.')
+            if len(deals)>100000:raise ValueError('Historique trop volumineux (100000 executions maximum).')
+            # Recover complete entries for old positions that closed in the window.
+            missing={d.position_id for d in deals if d.magic==MAGIC and d.entry in (1,3)}-{d.position_id for d in deals if d.entry==0}
+            all_deals=list(deals)
+            for pid in list(missing)[:20]:
+                older=self.mt.history_deals_get(position=int(pid))
+                if older:all_deals.extend(older)
+            self.history=aggregate_deals(all_deals,MAGIC,[getattr(p,'identifier',p.ticket) for p in positions],start.timestamp())
+            self.history.update(updated=time.time(),truncated=max(0,len(self.history['trades'])-500))
+            self.history['trades']=self.history['trades'][-500:]
+        except Exception as ex:self.history=empty_history('unavailable',str(ex))
+    def candles(self):
+        self.account()
+        if not self.mt.symbol_select(self.symbol,True):raise ValueError('Symbole indisponible.')
+        info=self.mt.symbol_info(self.symbol)
+        if info is None or info.currency_base!='EUR' or info.currency_profit!='USD':raise ValueError('EURUSD uniquement.')
+        rates=self.mt.copy_rates_from_pos(self.symbol,self.mt.TIMEFRAME_M3,1,10000)
+        if rates is None or len(rates)<50:raise ValueError('Historique M3 insuffisant.')
+        bars=[]
+        for r in sorted(rates,key=lambda r:int(r['time'])):
+            b=Bar(int(r['time']),float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point)
+            b.validate()
+            if b.time+180<=time.time():bars.append(dict(time=b.time,open=b.open,high=b.high,low=b.low,close=b.close,spread=b.spread))
+        return dict(symbol=self.symbol,timeframe='M3',bars=bars,source='MT5',closed_only=True)
     def snapshot(self):
         self.last_seen=time.time()
         try:
             a=self.account();positions=self.mt.positions_get()
             if positions is None:raise ValueError('Lecture des positions indisponible.')
+            self.record_equity(a);self.refresh_history(a,positions)
             tick=self.mt.symbol_info_tick(self.symbol)
             account=dict(login=str(a.login),server=a.server,balance=a.balance,equity=a.equity,profit=a.profit,
                          margin=a.margin,free_margin=a.margin_free,currency=a.currency,demo=True)
@@ -59,8 +123,9 @@ class DemoBridge:
                      profit=p.profit,owned=p.magic==MAGIC) for p in positions]
             return dict(connected=True,running=self.running,account=account,positions=ps,symbol=self.symbol,
                         quote=dict(bid=tick.bid,ask=tick.ask,time=tick.time) if tick else None,
-                        events=list(self.events),error=self.last_error,halted=self.risk.get('halted',False),
-                        time=time.time(),strategy='CHoCH / retest / rejet M3',risk=self.cfg.risk,rr=self.cfg.rr)
+                        events=list(self.events),error=self.last_error,halted=self.risk.get('halted',False),history=self.history,
+                        supervision=self.supervision,connector_version='4.0',equity_curve=list(self.equity_points),
+                        time=time.time(),strategy='CHoCH / retest / rejet M3',risk=self.cfg.risk,daily_loss=self.cfg.daily_loss,rr=self.cfg.rr)
         except Exception as ex:
             self.running=False;self.last_error=str(ex)
             return dict(connected=False,running=False,error=str(ex),events=list(self.events),time=time.time())
@@ -75,6 +140,8 @@ class DemoBridge:
         elif action=='start':
             a=self.guard_trade()
             if self.running:raise ValueError('Bot deja actif. Arreter avant de modifier les reglages.')
+            supervision=d.get('supervision','browser')
+            if supervision not in ('browser','autonomous'):raise ValueError('Mode de supervision invalide.')
             symbol=str(d.get('symbol','EURUSD'))
             if not 1<=len(symbol)<=40:raise ValueError('Symbole invalide.')
             if not self.mt.symbol_select(symbol,True):raise ValueError('Symbole introuvable dans MT5.')
@@ -95,13 +162,19 @@ class DemoBridge:
                 self.engine.feed(Bar(int(r['time']),float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False)
             self.engine.cancel(time.time(),'startup')
             self.event_cursor=len(self.engine.events)
+            self.supervision=supervision
             self.running=True;self.last_seen=time.time();self.last_error=''
-            self.log('START',account=str(a.login),symbol=symbol)
+            self.risk['last_config']=dict(risk=self.cfg.risk,daily_loss=self.cfg.daily_loss,rr=self.cfg.rr,supervision=supervision)
+            self.persist()
+            self.log('START',account=str(a.login),symbol=symbol,detail='Mode autonome' if supervision=='autonomous' else 'Mode supervise (tableau de bord actif)')
         else:raise ValueError('Commande inconnue.')
         self.commands.append(ident)
         return self.snapshot()
     def submit(self,s,tick,info):
         a=self.guard_trade()
+        if not all(math.isfinite(float(x)) for x in (tick.bid,tick.ask,tick.time)) or tick.bid<=0 or tick.ask<tick.bid or time.time()-tick.time>30 or tick.time>time.time()+5:raise ValueError('Cotation invalide ou perimee.')
+        if not all(math.isfinite(float(getattr(info,k))) and getattr(info,k)>0 for k in ('point','volume_step','volume_min','volume_max')):raise ValueError('Metadonnees de volume ou de prix invalides.')
+        if not math.isfinite(info.trade_tick_size) or info.trade_tick_size<0:raise ValueError('Taille de tick invalide.')
         if self.day_check(a):return
         positions=self.mt.positions_get();orders=self.mt.orders_get()
         if positions is None or orders is None:raise ValueError('Etat des ordres/positions indisponible.')
@@ -154,13 +227,14 @@ class DemoBridge:
             if adjusted is None or adjusted.retcode!=self.mt.TRADE_RETCODE_DONE:self.log('WARNING',detail='Cible initiale conservee : ajustement au prix execute refuse.')
     def step(self):
         if not self.running:return
-        if time.time()-self.last_seen>25:
+        if self.supervision=='browser' and time.time()-self.last_seen>25:
             self.running=False;self.log('PAUSE',detail='Tableau de bord inactif depuis 25 s.');return
         try:
             a=self.account()
+            self.record_equity(a)
             if self.day_check(a):self.running=False;return
             tick=self.mt.symbol_info_tick(self.symbol);info=self.mt.symbol_info(self.symbol)
-            if tick is None or info is None or time.time()-tick.time>30:raise ValueError('Cotation perimee.')
+            if tick is None or info is None or time.time()-tick.time>30 or tick.time>time.time()+5:raise ValueError('Cotation perimee ou future.')
             positions=self.mt.positions_get();orders=self.mt.orders_get()
             if positions is None or orders is None:raise ValueError('Positions/ordres indisponibles.')
             self.engine.position=True if positions or orders else None
@@ -173,7 +247,8 @@ class DemoBridge:
                 self.engine.feed(Bar(ts,float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False)
             for event in self.engine.events[getattr(self,'event_cursor',0):]:
                 self.log(event['event'],detail=event.get('reason','Signal de strategie'),**{k:v for k,v in event.items() if k in ('side','level')})
-            self.event_cursor=len(self.engine.events)
+            self.engine.events.clear();self.event_cursor=0
+            self.engine.bars=self.engine.bars[-1000:];self.engine.used=self.engine.used[-1000:]
             if self.engine.pending:
                 s=self.engine.pending
                 if tick.time>=s['ready']:
@@ -192,8 +267,10 @@ def serve(mt5,token,port=8765):
         def auth(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token)
         def do_GET(self):
             if not self.auth():return self.reply(401,{'error':'Authentification requise'})
-            if self.path!='/status':return self.reply(404,{'error':'Route inconnue'})
-            with bridge.lock:self.reply(200,bridge.snapshot())
+            if self.path not in ('/status','/candles'):return self.reply(404,{'error':'Route inconnue'})
+            try:
+                with bridge.lock:self.reply(200,bridge.snapshot() if self.path=='/status' else bridge.candles())
+            except (ValueError,TypeError) as ex:self.reply(400,{'error':str(ex)})
         def do_POST(self):
             if not self.auth():return self.reply(401,{'error':'Authentification requise'})
             if self.path!='/command':return self.reply(404,{'error':'Route inconnue'})
@@ -205,11 +282,15 @@ def serve(mt5,token,port=8765):
             except (ValueError,TypeError,KeyError) as ex:self.reply(400,{'error':str(ex)})
     def loop():
         while True:
-            with bridge.lock:bridge.step()
+            try:
+                with bridge.lock:bridge.step()
+            except Exception as ex:
+                with bridge.lock:
+                    bridge.running=False;bridge.last_error='Moteur arrete : '+str(ex)
             time.sleep(.5)
     threading.Thread(target=loop,daemon=True).start()
     server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
-    print('Connecteur DEMO local actif. Aucun ordre avant Demarrer sur le site.',flush=True)
+    print('Trading Bot v4 - DEMO local actif. Aucun ordre avant Demarrer sur le site.',flush=True)
     server.serve_forever()
 
 if __name__=='__main__':

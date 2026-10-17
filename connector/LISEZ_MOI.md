@@ -1,40 +1,53 @@
-# Ben Forex Lab — connecteur MT5 démo
+# Trading Bot — connecteur Windows v4
 
-## Installation Windows
+## Première installation
 
-1. Installer Python 3.10+ 64 bits avec son lanceur `py` et MetaTrader 5.
-2. Dans MT5, ouvrir un compte **DEMO en USD**. Activer Algo Trading et, dans les options Expert Advisors, autoriser le trading via l'API Python externe.
-3. Extraire le ZIP. Lancer `INSTALLER_ET_LANCER.bat`. Ce script crée un environnement Python local, installe le module MetaTrader5 et, si nécessaire, Cloudflare Tunnel via winget.
-4. Copier l'URL de liaison HTTPS et la clé affichées dans « Connecter mon PC » sur le site privé. Ces valeurs sont des secrets de liaison : ne pas les publier.
-5. Vérifier le numéro du compte affiché, régler le symbole exact EURUSD (suffixes courtier acceptés), puis cliquer sur **Démarrer**.
+1. Installer Python 3.10+ 64 bits avec le lanceur `py`, puis ouvrir MetaTrader 5 sur un compte **DEMO en USD**.
+2. Activer Algo Trading et autoriser le trading via API Python externe dans les options de MT5.
+3. Extraire ce ZIP et lancer `INSTALLER_ET_LANCER.bat`. L'installation crée un environnement Python local, installe MetaTrader5 et peut installer Cloudflare Tunnel via winget.
+4. Le lancement vérifie le compte démo avant d'ouvrir le tunnel, puis affiche URL et clé de liaison. Elles ne sont pas des identifiants MT5 ; ne pas les publier.
+5. Ouvrir https://ben-bot-mt5.onrender.com et relier le PC avec ces deux valeurs. Vérifier le compte affiché avant de cliquer sur Démarrer.
 
-Pour les lancements suivants : `LANCER.bat`. Si winget vient d'installer cloudflared et que celui-ci reste introuvable, fermer la fenêtre et relancer. L'URL et la clé changent à chaque lancement. Le mot de passe MT5 reste dans le terminal, il n'est jamais demandé par le site.
+Pour les démarrages suivants : `LANCER.bat`. Si cloudflared vient d'être installé mais reste introuvable, fermer la fenêtre puis relancer. Un seul connecteur doit utiliser le port 8765. Si plusieurs terminaux MT5 sont installés, vérifier le numéro de compte affiché avant Démarrer.
 
-Site : Ton nouveau domaine externe (après déploiement)
+## Mise à jour
 
-## Fonctionnement
+Arrêter le bot et fermer l'ancien connecteur. Installer les nouveaux fichiers dans le même dossier ou recopier l'ancien `risk_state.json` et `risk_state_equity.json` dans le nouveau dossier. **Ne pas supprimer l'état de risque pour contourner le verrou quotidien.** L'ancienne version peut avoir un dossier nommé Ben_MT5_Demo_Connecteur ; les fichiers d'état restent compatibles.
 
-Le site privé conserve côté serveur l'URL et la clé de liaison, associées à l'utilisateur connecté. Le connecteur écoute uniquement sur 127.0.0.1:8765 et exige la clé pour toute lecture ou commande. Cloudflare fournit le tunnel HTTPS temporaire. Aucun port entrant du routeur à ouvrir. Ce tunnel gratuit est prévu pour des essais et peut être interrompu ; reconnecter avec la nouvelle URL si nécessaire.
+## Fermer le navigateur
 
-Le PC, MT5 et le connecteur doivent rester allumés. Le tableau de bord contacte le PC toutes les cinq secondes. Après 25 secondes sans contact, le bot suspend les nouvelles entrées ; il faut cliquer à nouveau sur Démarrer. Sur téléphone, la mise en veille ou le navigateur en arrière-plan peut provoquer cette pause. **Arrêter ne ferme pas les positions existantes** : leurs SL/TP restent chez le courtier. Fermer les positions manuellement dans MT5 si souhaité.
+Le mode par défaut est supervisé : pause après 25 secondes sans tableau de bord actif.
 
-Le connecteur envoie des ordres réels **sur le serveur de démonstration**, sans argent réel. Comptes réels et concours rejetés, type du compte revérifié immédiatement avant chaque envoi/modification. Seule la paire EUR/USD et un compte USD sont pris en charge. Le bot est à l'arrêt au lancement du processus. Une position ou un ordre déjà présent sur le compte bloque toute nouvelle entrée, même d'origine manuelle.
+Le mode autonome s'active en cochant **Continuer quand le site est fermé**, avant Démarrer. Le PC, MT5 et cette fenêtre doivent rester ouverts. Render ou le navigateur peuvent alors être fermés/mis en veille sans arrêter le moteur local. Un tunnel coupé empêche les commandes distantes ; intervenir sur le PC si nécessaire.
 
-## Stratégie et risque
+Arrêter bloque les nouvelles entrées ; les positions ouvertes conservent leurs SL/TP. Une fermeture de cette fenêtre stoppe le moteur. Un relancement démarre toujours à l'arrêt, même si le mode précédent était autonome.
 
-Moteur CHoCH, retest et rejet de la V1. Bougies M3 clôturées, pivots confirmés avec deux bougies de retard. Largeur totale de zone 0,15 ATR14, mèche minimale 40 %, délai de 20 bougies, marge de stop 0,1 ATR. Signal rejeté si une entrée fraîche n'est plus possible dans les 30 secondes suivant la clôture. Aucun signal historique exécuté au démarrage.
+## Historique et sauvegardes
 
-Risque par défaut 0,5 %, limite quotidienne 1 %, ratio brut 1:2. Paramètres éditables depuis le site ; plafonds de test : risque 1 % et limite quotidienne 3 %. Stop et cible transmis avec l'ordre d'entrée. Cible ensuite ajustée au prix d'exécution si le courtier l'accepte ; sinon la cible initiale est conservée et une alerte apparaît. Les coûts modélisés pour la taille incluent la commission estimée (3,50 USD/lot/côté) et une réserve de glissement ; ils doivent être adaptés au courtier avant toute analyse de performance.
+- `risk_state.json` : limites quotidiennes séparées par compte, dernier signal envoyé, dernière configuration. Écriture atomique.
+- `risk_state_equity.json` : jusqu'à 2 880 observations d'equity, sauvegardées toutes les 60 secondes au plus.
+- `journal.jsonl` : décisions et anomalies locales.
+- Historique des trades : relu auprès de MT5, regroupé par position sur 90 jours, avec commissions/swap/frais associés et sorties partielles. Au plus 500 positions récentes affichées et exportées en CSV ; les limites sont signalées.
 
-Les gaps/exécutions peuvent dépasser le risque prévu. Le verrou quotidien repose sur l'equity du compte entier et sa référence à la première observation du jour UTC. Ne pas supprimer `risk_state.json` pendant la journée : il conserve le verrou et le dernier signal envoyé. Un changement de compte met le bot en pause ; relancer le connecteur pour changer de compte démo. Aucune martingale ni empilement.
+Les positions modifiées par des ajouts manuels sont exclues du bilan pour éviter d'attribuer leurs résultats au bot. Les clôtures manuelles seules sont prises en compte.
 
-Chaque signal est marqué comme envoyé avant appel à MT5 pour éviter de rejouer un ordre après réponse incertaine. Une réponse incertaine arrête le bot ; inspecter MT5 avant de redémarrer. Le bot ne répète pas automatiquement l'ordre. Les rejets et erreurs sont dans `journal.jsonl` et le tableau de bord.
+La liaison au PC est conservée chiffrée dans le navigateur 30 jours et survit au redémarrage du serveur Render tant que SESSION_SECRET reste stable. Un autre appareil doit être relié séparément. Chaque nouveau lancement du tunnel change l'URL/la clé : relier à nouveau.
 
-## Vérification et limites
+## Stratégie et limites
 
-Les tests automatisés utilisent un faux terminal, sans accès à un compte. L'installation Windows, la liaison HTTPS sur ton PC et les exécutions chez ton courtier restent à vérifier sur compte démo. Aucune rentabilité ni exécution continue n'est garantie. Le navigateur doit rester actif pendant ces premiers essais.
+EUR/USD M3, CHoCH → retest → prise de liquidité → rejet. Bougies clôturées uniquement, pivots 2/2 confirmés avec retard, ATR14 arithmétique, largeur totale de zone 0,15 ATR, mèche minimale 40 %, expiration 20 bougies, stop au-delà de la mèche avec marge 0,1 ATR.
+
+Risque par défaut 0,5 %, limite quotidienne 1 %, ratio brut 1:2. Plafonds de test : risque 1 % et limite quotidienne 3 %. Une seule position/un seul ordre sur le compte ; aucun empilement ni martingale. Une clôture de signal de plus de 30 secondes n'est plus exécutée. La taille respecte le pas/minimum du courtier, les frais estimés et la marge disponible. Les gaps peuvent dépasser le risque prévu.
+
+Compte réel/concours et compte non-USD refusés. Type du compte vérifié immédiatement avant chaque envoi/modification. Si la réponse d'un ordre est incertaine, le moteur s'arrête sans répéter automatiquement l'ordre. Vérifier MT5 avant de relancer.
+
+La source MT5 du laboratoire exporte jusqu'à 10 000 bougies clôturées ; cette lecture est sans ordre. L'historique ne constitue pas une garantie de rentabilité. Un marché fermé ou un tick périmé provoque un refus/pause des nouvelles entrées.
+
+## Vérification
+
+Tests automatisés avec terminal simulé. Aucun compte utilisateur ni courtier n'a été utilisé par ces tests. Installation Windows, tunnel du PC et exécutions chez le courtier restent à vérifier en démo.
 
 Références :
 - https://www.mql5.com/en/docs/python_metatrader5/mt5ordersend_py
-- https://www.mql5.com/en/docs/python_metatrader5/mt5accountinfo_py
+- https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py
 - https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/

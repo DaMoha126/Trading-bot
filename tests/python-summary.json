@@ -1,0 +1,35 @@
+{
+  "label": "DONNEES SYNTHETIQUES — verification technique, aucun resultat de marche",
+  "mode": "SIMULATION",
+  "symbol": "EURUSD",
+  "trades": 16,
+  "signals": 22,
+  "cancelled": 39,
+  "rejected": 6,
+  "data_gaps": 0,
+  "win_rate": 0.3125,
+  "average_win": 69.58473320882236,
+  "average_loss": -44.90703159040824,
+  "expectancy": -9.128355090648679,
+  "realized_net": -146.05368145037886,
+  "cash": 9853.946318549624,
+  "open_position": null,
+  "last_equity": 9853.946318549624,
+  "errors": 0,
+  "max_drawdown": 0.0274657163966418,
+  "by_period_and_side": {
+    "BUY": {
+      "trades": 7,
+      "pnl": -95.37962323993537
+    },
+    "2026-01": {
+      "trades": 16,
+      "pnl": -146.05368145037886
+    },
+    "SELL": {
+      "trades": 9,
+      "pnl": -50.674058210443555
+    }
+  },
+  "cancelled_pending_at_end": false
+}

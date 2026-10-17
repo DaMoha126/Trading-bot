@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {handleBridge,validateLink} from './lib/bridge-service.mjs';
+import {connectionBucket} from './lib/connection-cookie.mjs';
+const url='https://first-test.trycloudflare.com',key='k'.repeat(43),secret='test-service-secret-not-production';let calls=[],offline=false,version='4.0';
+const fake=async(u,o)=>{calls.push({u,o});if(offline)throw Error('offline');return Response.json(u.endsWith('/candles')?{bars:[{time:180,open:1,high:1,low:1,close:1,spread:0}],closed_only:true}:{connected:true,running:false,connector_version:version,account:{demo:true},supervision:'browser'});};
+const req=(body,user='owner')=>new Request('https://site.test/api/bridge',{method:body?'POST':'GET',headers:{...(user?{'oai-authenticated-user-id':user}:{}),origin:'https://site.test','content-type':'application/json'},body:body?JSON.stringify(body):undefined});
+for(const u of ['http://first-test.trycloudflare.com','https://localhost','https://first-test.trycloudflare.com.evil.test','https://first-test.trycloudflare.com/path'])assert.throws(()=>validateLink(u,key));
+let store=connectionBucket({headers:{}},secret,true);
+assert.equal((await handleBridge(req(null,null),store,fake)).status,401);
+let r=await handleBridge(req({action:'pair',url,key}),store,fake);assert.equal(r.status,200);assert.ok(!(await r.text()).includes(key));const cookie=store.cookie.split(';')[0];
+store=connectionBucket({headers:{cookie}},secret,true);r=await handleBridge(req(null),store,fake);assert.equal((await r.json()).paired,true);
+r=await handleBridge(req({action:'start',id:'start-test-autonomy',supervision:'autonomous',symbol:'EURUSD',config:{risk:.005}}),store,fake);assert.equal(r.status,200);assert.equal(JSON.parse(calls.at(-1).o.body).supervision,'autonomous');assert.equal(calls.at(-1).o.redirect,'error');
+version='3.0';assert.equal((await handleBridge(req({action:'start',id:'old-version-autonomy',supervision:'autonomous'}),store,fake)).status,400);assert.equal((await handleBridge(req({action:'candles'}),store,fake)).status,400);
+version='4.0';assert.equal((await handleBridge(req({action:'candles'}),store,fake)).status,200);
+offline=true;let d=await (await handleBridge(req(null),store,fake)).json();assert.equal(d.running,null);assert.equal(d.connected,false);
+r=await handleBridge(req({action:'unpair'}),store,fake);d=await r.json();assert.equal(d.running,null);assert.ok(d.warning.includes('autonome'));assert.ok(store.cookie.includes('Max-Age=0'));
+console.log('PASS: encrypted persisted pairing, origin/endpoint guards, autonomous/version checks, MT5 candle path, unknown status on failure and unpair warning.');

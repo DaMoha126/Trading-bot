@@ -1,4 +1,6 @@
 .git
+hosted/accounts.json
+hosted/data/
 node_modules
 .env
 connector/risk_state.json

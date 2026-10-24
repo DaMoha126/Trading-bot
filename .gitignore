@@ -6,3 +6,5 @@ connector/journal.jsonl
 
 connector/*_equity.json
 connector/*.tmp
+hosted/accounts.json
+hosted/data/

@@ -1,0 +1,5 @@
+{
+  "template": "C:/TradingBot/TemplateMT5",
+  "capacity": 2,
+  "servers": ["Deriv-Demo"]
+}

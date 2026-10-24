@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -48,6 +49,41 @@ def load_accounts(path):
         accounts[key] = dict(login=str(int(row['login'])), server=row['server'], terminal=str(terminal))
         terminals.add(normalized)
     return accounts
+
+
+def prepare_pool(path, data_root):
+    """Prepare capacity once from a clean operator-provided terminal, never copy accounts/EAs."""
+    config = json.loads(Path(path).read_text(encoding='utf8'))
+    template = Path(config['template']).resolve()
+    count = config.get('capacity', 2)
+    servers = config.get('servers', [])
+    if (not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 10
+            or not isinstance(servers, list) or not 1 <= len(servers) <= 30):
+        raise ValueError('Configurer 1 a 10 places et les serveurs demo pris en charge.')
+    for server in servers:
+        identity('1', server)
+    source = template / 'terminal64.exe'
+    if not source.is_file():
+        raise ValueError('Le modele doit contenir terminal64.exe.')
+    root = Path(data_root).resolve() / 'terminals'
+    if template == root or root in template.parents or template in root.parents:
+        raise ValueError('Le modele et les instances doivent etre dans des dossiers distincts.')
+    slots = []
+    for index in range(count):
+        folder = root / f'slot-{index + 1:02}'
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / 'terminal64.exe'
+        if not target.exists():
+            temp = folder / 'terminal64.exe.tmp'
+            shutil.copyfile(source, temp)
+            os.replace(temp, target)
+        # Only server discovery metadata, not accounts.dat, profiles, logs, or Expert Advisors.
+        metadata = template / 'Config' / 'servers.dat'
+        if metadata.is_file() and not (folder / 'Config' / 'servers.dat').exists():
+            (folder / 'Config').mkdir(exist_ok=True)
+            shutil.copyfile(metadata, folder / 'Config' / 'servers.dat')
+        slots.append({'terminal': str(target), 'servers': list(servers)})
+    return slots
 
 
 class Actor:
@@ -99,14 +135,30 @@ class Actor:
 
 
 class Hub:
-    def __init__(self, accounts, data_root, actor_factory=Actor):
-        self.accounts = accounts
+    def __init__(self, accounts, data_root, actor_factory=Actor, pool=None):
+        self.accounts = dict(accounts)
         self.data_root = Path(data_root)
+        self.pool = pool or []
+        self.registry = self.data_root / 'assignments.json'
+        if self.pool and self.registry.exists():
+            saved = json.loads(self.registry.read_text(encoding='utf8'))
+            if not isinstance(saved, dict):
+                raise ValueError('Registre invalide : ne pas le supprimer pour liberer des places.')
+            known = {slot['terminal']: slot['servers'] for slot in self.pool}
+            used = {row['terminal'] for row in self.accounts.values()}
+            for key, row in saved.items():
+                if (not isinstance(row, dict) or key != identity(row.get('login', ''), row.get('server', ''))
+                        or row.get('terminal') not in known or row['server'] not in known[row['terminal']]
+                        or row['terminal'] in used or key in self.accounts):
+                    raise ValueError('Registre incompatible avec la capacite configuree.')
+                self.accounts[key] = {k: row[k] for k in ('login', 'server', 'terminal')}
+                used.add(row['terminal'])
         self.actor_factory = actor_factory
         self.actors = {}
         self.sessions = {}
         self.attempts = {}
         self.lock = threading.RLock()
+        self.session_lock = threading.RLock()
 
     def login(self, login, server, password):
         key = identity(login, server)
@@ -123,6 +175,14 @@ class Hub:
                     raise ValueError('Trop de tentatives. Reessayer dans cinq minutes.')
                 history.append(now)
             config = self.accounts.get(key)
+            newly_assigned = False
+            if not config and self.pool:
+                used = {row['terminal'] for row in self.accounts.values()}
+                slot = next((s for s in self.pool if s['terminal'] not in used and server in s['servers']), None)
+                if slot is None:
+                    raise ValueError('Aucune place disponible pour ce serveur. Reessayer plus tard.')
+                config = {'login': str(int(login)), 'server': server, 'terminal': slot['terminal']}
+                newly_assigned = True
             if not config:
                 raise ValueError('Connexion refusee. Verifier les identifiants ou contacter l administrateur.')
             actor = self.actors.get(key)
@@ -134,16 +194,33 @@ class Hub:
                     raise ValueError('Identifiants invalides.')
             else:
                 actor = self.actor_factory(config, password, self.data_root)
-                self.actors[key] = actor
-            self.sessions = {s: v for s, v in self.sessions.items() if v[1] > now}
-            if len(self.sessions) >= 256:
-                raise ValueError('Nombre maximal de sessions atteint.')
-            token = secrets.token_urlsafe(32)
-            self.sessions[token] = (key, now + 12 * 3600)
+                if newly_assigned:
+                    try:
+                        self.data_root.mkdir(parents=True, exist_ok=True)
+                        updated = {**self.accounts, key: config}
+                        temp = self.registry.with_suffix('.tmp')
+                        with temp.open('w', encoding='utf8') as file:
+                            json.dump(updated, file)
+                            file.flush()
+                            os.fsync(file.fileno())
+                        os.replace(temp, self.registry)
+                        self.accounts[key] = config
+                    except Exception:
+                        actor.close()
+                        raise
+                with self.session_lock:
+                    self.actors[key] = actor
+            with self.session_lock:
+                self.sessions = {s: v for s, v in self.sessions.items() if v[1] > now}
+                if len(self.sessions) >= 256:
+                    raise ValueError('Nombre maximal de sessions atteint.')
+                token = secrets.token_urlsafe(32)
+                self.sessions[token] = (key, now + 12 * 3600)
             return token
 
     def actor(self, token):
-        with self.lock:
+        # A new MT5 login can take seconds; do not block existing accounts' heartbeats.
+        with self.session_lock:
             row = self.sessions.get(token)
             if not row or row[1] <= time.time():
                 self.sessions.pop(token, None)
@@ -151,7 +228,7 @@ class Hub:
             return self.actors.get(row[0])
 
     def logout(self, token):
-        with self.lock:
+        with self.session_lock:
             self.sessions.pop(token, None)
 
     def close(self):
@@ -160,6 +237,9 @@ class Hub:
 
 
 LOGIN = '''<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trading Bot · Connexion MT5</title><style>body{margin:0;background:#050907;color:#e9e7d9;font:15px system-ui;display:grid;min-height:100vh;place-items:center}main{box-sizing:border-box;width:min(430px,92vw);padding:30px;border:1px solid #665730;border-radius:16px}h1{color:#dfc16b}label{display:block;margin:18px 0}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:6px;margin-top:7px}input{background:#111911;color:white;border:1px solid #46503b}button{background:#41d9ae;border:0;font-weight:bold}p{font-size:13px;line-height:1.7;color:#b6c3af}.error{color:#ffb1ab}</style><main><h1>Trading Bot</h1><p>Relie ton compte MT5 démo. Le moteur fonctionne sur le serveur de Ben : aucune installation sur ton téléphone.</p>ERROR<form action="/login" method="post"><label>Identifiant MT5<input name="login" inputmode="numeric" pattern="[0-9]{1,18}" maxlength="18" autocomplete="username" required></label><label>Serveur du courtier<input name="server" maxlength="100" placeholder="Exemple : Deriv-Demo" required></label><label>Mot de passe de trading MT5<input name="password" type="password" maxlength="256" autocomplete="current-password" required></label><button>Connecter mon compte →</button></form><p>Pilote démo USD uniquement. Ton compte doit être préparé par Ben. Aucun ordre n’est lancé à la connexion.</p></main></html>'''
+
+
+LOGIN = LOGIN.replace('Ton compte doit être préparé par Ben.', 'Attribution automatique selon les places et serveurs disponibles.')
 
 
 def dashboard():
@@ -228,8 +308,11 @@ def handler(hub, proxy_key, origin):
                     token = hub.login(fields.get('login', [''])[0], fields.get('server', [''])[0], fields.get('password', [''])[0])
                     hub.logout(self.token())
                     return self.reply(303, Location='/', **{'Set-Cookie': self.cookie(token)})
-                except (ValueError, OSError):
-                    return self.reply(400, LOGIN.replace('ERROR', '<p class="error">Connexion refusée : vérifie les identifiants, la préparation du compte ou réessaie dans cinq minutes.</p>').encode())
+                except (ValueError, OSError) as error:
+                    message = ('Aucune place disponible pour ce serveur. Réessaie plus tard.'
+                               if str(error).startswith('Aucune place disponible') else
+                               'Connexion refusée : vérifie tes identifiants et le serveur, ou réessaie dans cinq minutes.')
+                    return self.reply(400, LOGIN.replace('ERROR', '<p class="error">' + message + '</p>').encode())
             token = self.token()
             actor = hub.actor(token)
             if not actor:
@@ -291,13 +374,24 @@ def handler(hub, proxy_key, origin):
 
 
 def main():
+    data_root = ROOT / 'hosted' / 'data'
+    pool_file = Path(os.environ.get('MT5_POOL_FILE', str(ROOT / 'hosted' / 'pool.json')))
+    if sys.argv[1:] == ['--prepare-only']:
+        slots = prepare_pool(pool_file, data_root)
+        for slot in slots:
+            print(slot['terminal'])
+        print('Capacite preparee. Verifier une fois le mode portable et les autorisations API de chaque place.')
+        return
     key = os.environ.get('MT5_HOST_KEY', '')
     origin = os.environ.get('PUBLIC_URL', '').rstrip('/')
     parsed = urlsplit(origin)
     if len(key) < 32 or parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username:
         raise SystemExit('MT5_HOST_KEY (32 caracteres minimum) et PUBLIC_URL HTTPS requis.')
-    accounts = load_accounts(os.environ.get('MT5_ACCOUNTS_FILE', str(ROOT / 'hosted' / 'accounts.json')))
-    hub = Hub(accounts, ROOT / 'hosted' / 'data')
+    if pool_file.exists():
+        hub = Hub({}, data_root, pool=prepare_pool(pool_file, data_root))
+    else:
+        accounts = load_accounts(os.environ.get('MT5_ACCOUNTS_FILE', str(ROOT / 'hosted' / 'accounts.json')))
+        hub = Hub(accounts, data_root)
     server = ThreadingHTTPServer(('127.0.0.1', int(os.environ.get('MT5_HOST_PORT', '8770'))), handler(hub, key, origin))
     try:
         print('Hote MT5 demo pret. Aucun ordre avant Demarrer.', flush=True)

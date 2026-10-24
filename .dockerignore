@@ -1,5 +1,6 @@
 .git
 hosted/accounts.json
+hosted/pool.json
 hosted/data/
 node_modules
 .env

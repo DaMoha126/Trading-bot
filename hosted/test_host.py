@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from host import Hub, handler, identity, load_accounts, dashboard
+from host import Hub, handler, identity, load_accounts, dashboard, prepare_pool, LOGIN
 from worker import authenticate
 
 
@@ -151,6 +151,98 @@ class HostTest(unittest.TestCase):
         terminal.path = '/fake/other'
         with self.assertRaises(ValueError):
             authenticate(mt, config, 'secret')
+
+    def test_auto_assignment_requires_no_pre_registered_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pool = [{'terminal': 'slot1/terminal64.exe', 'servers': ['Demo']},
+                    {'terminal': 'slot2/terminal64.exe', 'servers': ['Demo']}]
+            hub = Hub({}, tmp, FakeActor, pool=pool)
+            one = hub.login('111', 'Demo', 'demo-test-password')
+            two = hub.login('222', 'Demo', 'demo-test-password')
+            self.assertNotEqual(hub.actor(one).config['terminal'], hub.actor(two).config['terminal'])
+            self.assertEqual(hub.actor(one).requests, [])
+            self.assertEqual(hub.actor(two).requests, [])
+            self.assertNotIn('demo-test-password', hub.registry.read_text())
+            with self.assertRaisesRegex(ValueError, 'Aucune place'):
+                hub.login('333', 'Demo', 'demo-test-password')
+
+    def test_bad_credentials_do_not_reserve_capacity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pool = [{'terminal': 'slot1/terminal64.exe', 'servers': ['Demo']}]
+            hub = Hub({}, tmp, FakeActor, pool=pool)
+            with self.assertRaises(ValueError):
+                hub.login('111', 'Demo', 'wrong')
+            self.assertEqual(hub.accounts, {})
+            self.assertFalse(hub.registry.exists())
+            token = hub.login('222', 'Demo', 'demo-test-password')
+            self.assertEqual(hub.actor(token).config['login'], '222')
+
+    def test_assignment_and_risk_directory_remain_stable_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pool = [{'terminal': 'slot1/terminal64.exe', 'servers': ['Demo']}]
+            hub = Hub({}, tmp, FakeActor, pool=pool)
+            one = hub.login('111', 'Demo', 'demo-test-password')
+            config = dict(hub.actor(one).config)
+            restarted = Hub({}, tmp, FakeActor, pool=pool)
+            self.assertIsNone(restarted.actor(one))
+            two = restarted.login('111', 'Demo', 'demo-test-password')
+            self.assertEqual(restarted.actor(two).config, config)
+            with self.assertRaisesRegex(ValueError, 'Aucune place'):
+                restarted.login('222', 'Demo', 'demo-test-password')
+
+    def test_pool_clones_no_credentials_profiles_or_experts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = root / 'template'
+            template.mkdir()
+            (template / 'terminal64.exe').write_bytes(b'fake-executable-for-test')
+            (template / 'Config').mkdir()
+            (template / 'Config' / 'servers.dat').write_bytes(b'server-discovery')
+            (template / 'Config' / 'accounts.dat').write_text('do-not-copy')
+            (template / 'Profiles').mkdir()
+            (template / 'Profiles' / 'secret').write_text('do-not-copy')
+            (template / 'MQL5').mkdir()
+            (template / 'MQL5' / 'auto.ex5').write_text('do-not-copy')
+            config = root / 'pool.json'
+            config.write_text(json.dumps({'template': str(template), 'capacity': 2, 'servers': ['Demo']}))
+            pool = prepare_pool(config, root / 'data')
+            for slot in pool:
+                folder = Path(slot['terminal']).parent
+                self.assertTrue((folder / 'Config' / 'servers.dat').exists())
+                self.assertFalse((folder / 'Config' / 'accounts.dat').exists())
+                self.assertFalse((folder / 'Profiles').exists())
+                self.assertFalse((folder / 'MQL5').exists())
+            self.assertEqual(prepare_pool(config, root / 'data'), pool)
+
+    def test_unsupported_server_does_not_consume_slot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub({}, tmp, FakeActor, pool=[{'terminal': 'slot1/terminal64.exe', 'servers': ['Demo']}])
+            with self.assertRaises(ValueError):
+                hub.login('1', 'Unsupported-Demo', 'demo-test-password')
+            self.assertEqual(hub.accounts, {})
+            self.assertNotIn('Ton compte doit être préparé par Ben', LOGIN)
+
+    def test_new_login_does_not_block_existing_session_lookup(self):
+        token = self.hub.login('1', 'Demo', 'demo-test-password')
+        acquired = threading.Event()
+        release = threading.Event()
+        def slow_login_lock():
+            with self.hub.lock:
+                acquired.set()
+                release.wait(2)
+        thread = threading.Thread(target=slow_login_lock)
+        thread.start()
+        acquired.wait(1)
+        try:
+            result = []
+            check = threading.Thread(target=lambda: result.append(self.hub.actor(token)))
+            check.start()
+            check.join(.5)
+            self.assertFalse(check.is_alive())
+            self.assertIsNotNone(result[0])
+        finally:
+            release.set()
+            thread.join()
 
 
 if __name__ == '__main__':

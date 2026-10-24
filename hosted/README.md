@@ -1,119 +1,119 @@
-# Connexion directe MT5 — pilote sur le portable de Ben
+# Connexion directe MT5 — attribution automatique sur le portable
 
 ## État réel
 
-Code de pilote, distinct du serveur v4 actuel. Les visiteurs saisissent identifiant MT5,
-serveur et mot de passe de trading sur `/login`. Le site vérifie le compte auprès du
-terminal Windows préparé par Ben. Une session opaque donne accès uniquement au moteur
-de ce compte. Aucun ordre au login. Comptes démo USD et stratégie EUR/USD uniquement.
+Pilote distinct de la v4 en ligne. Chaque visiteur saisit son identifiant MT5, le serveur
+du courtier et le mot de passe de trading. Un compte démo USD valide reçoit automatiquement
+une place disponible : aucune création manuelle de son compte dans un fichier.
+Aucun ordre n'est lancé à la connexion. EUR/USD uniquement pour la stratégie actuelle.
 
-Ce mode n'est pas activé automatiquement sur Render. Le portable doit d'abord être
-configuré et testé. Aucun test Windows, courtier ou passage d'ordre réel n'est revendiqué.
+Les tests utilisent MT5 simulé. Installation Windows, initialisation des copies MT5,
+connexion au courtier et exécution en démo restent à vérifier avant la bascule du site.
 
-## Architecture du pilote
+## Préparation unique par Ben
 
-- Render lance `node hosted/proxy.mjs` : relais HTTPS vers une seule adresse autorisée.
-- Le portable lance `hosted/host.py`, qui écoute seulement sur `127.0.0.1:8770`.
-- Cloudflare Tunnel transporte les requêtes. Sa clé de service privée est connue seulement
-  de Render et du portable ; les visiteurs ne la saisissent pas.
-- Un processus Python et un terminal MT5 portable dédiés par compte configuré. Fichiers
-  de risque et journal séparés par empreinte de l'identité du compte.
-- Le portable n'est pas une isolation système complète : l'administrateur et un processus
-  compromis avec ses droits peuvent atteindre les terminaux. Ce pilote est destiné à un
-  petit groupe de confiance ; ne pas le présenter comme un service public prêt à grande échelle.
+Ben prépare la capacité du serveur, pas chaque utilisateur. Exemple : deux places pour
+commencer. Les dossiers terminaux sont créés automatiquement à partir d'un modèle MT5.
+Une place reste affectée au compte après déconnexion pour préserver son état de risque.
+Quand toutes les places sont affectées, les nouveaux comptes sont refusés clairement.
+Ce pilote ne réaffecte pas automatiquement les terminaux et ne réinitialise pas leur risque.
 
-## Préparer le portable Windows (administrateur Ben)
-
-1. Garder le portable alimenté, connecté et sans veille ; capot fermé uniquement si les
-   options Windows l'autorisent et si le refroidissement est suffisant.
-2. Installer Python 3.10+ 64 bits, Node n'est pas nécessaire sur le portable.
-3. Récupérer ce dépôt et installer la dépendance :
+1. Sur le portable Windows, installer Python 3.10+ 64 bits, garder Internet et désactiver
+   la veille sur secteur. Le site reste sur Render.
+2. Récupérer ce dépôt puis préparer Python :
 
    ```powershell
    py -3 -m venv .venv
    .\.venv\Scripts\python.exe -m pip install MetaTrader5
    ```
 
-4. Préparer une installation MT5 **distincte par compte** avec son propre dossier, par
-   exemple `C:/TradingBot/Terminals/client-01/terminal64.exe`. Lancer cette installation
-   en mode `/portable`, depuis un dossier accessible en écriture. Ne pas pointer plusieurs
-   comptes vers le même exécutable. Prévoir le bon terminal du courtier et tester le serveur.
-   Vérifier que Fichier → Ouvrir le dossier des données ouvre le dossier dédié en mode
-   portable ; l'hôte refuse une autre localisation. Ne charger aucun EA sur ses graphiques,
-   afin que seul notre moteur puisse demander des ordres après Démarrer.
-5. Dans chaque terminal, autoriser le trading algorithmique et décocher le blocage de
-   l'API Python externe. Les mots de passe investisseur ne permettent pas ce pilote.
-6. Copier `hosted/accounts.example.json` vers `hosted/accounts.json`. Remplacer login,
-   serveur et chemin par ceux du compte démo autorisé. Ne pas y inscrire de mot de passe.
-   Chaque nouveau compte doit être préparé par Ben ; l'inscription libre n'est pas implémentée.
-7. Générer une clé de service aléatoire de 32 octets minimum et la conserver dans les
-   variables d'environnement des deux systèmes. Ne pas la commettre ou l'envoyer dans le chat.
-   Les paramètres requis dans la session PowerShell sont `MT5_HOST_KEY` et `PUBLIC_URL`
-   (`https://ben-bot-mt5.onrender.com`). Puis lancer :
+3. Installer une copie MT5 modèle dans un dossier dédié, par exemple
+   `C:/TradingBot/TemplateMT5`. Utiliser un terminal authentique du courtier.
+   Vérifier une fois qu'il connaît les serveurs démo proposés.
+4. Copier `hosted/pool.example.json` vers `hosted/pool.json`. Indiquer :
+   - `template` : dossier contenant terminal64.exe ;
+   - `capacity` : nombre de places, 2 au départ, maximum technique 10 non dimensionné ;
+   - `servers` : noms exacts des serveurs démo pris en charge.
+   Aucun numéro de compte ni mot de passe utilisateur dans cette configuration.
+5. Créer les places :
+
+   ```powershell
+   .\.venv\Scripts\python.exe hosted\host.py --prepare-only
+   ```
+
+   Seuls terminal64.exe et, si présent, Config/servers.dat sont copiés. Ni comptes,
+   profils, journaux, ni EA du modèle ne sont clonés. Cette initialisation minimale doit
+   être validée sur le portable : ne pas prétendre à une installation Windows déjà testée.
+6. À la préparation initiale de la capacité, ouvrir chaque copie créée en mode
+   `/portable`, autoriser le trading algorithmique et l'API Python externe.
+   Ne charger aucun EA sur ses graphiques. Vérifier que « Ouvrir le dossier des données »
+   pointe sur son dossier dédié. Ces réglages concernent les places une fois, pas chaque
+   nouvel utilisateur. Le programme refuse une instance qui utilise un autre dossier.
+7. Configurer une clé de service aléatoire de 32 octets minimum dans `MT5_HOST_KEY` et
+   `PUBLIC_URL=https://ben-bot-mt5.onrender.com` dans l'environnement de lancement.
+   Garder la clé privée ; ne pas l'envoyer dans le chat ou la commettre. Lancer l'hôte :
 
    ```powershell
    .\.venv\Scripts\python.exe hosted\host.py
    ```
 
-8. Dans une autre fenêtre, lancer un tunnel vers l'hôte (cloudflared doit être installé) :
+8. Dans une autre fenêtre, lancer le tunnel (cloudflared installé) :
 
    ```powershell
    cloudflared tunnel --url http://127.0.0.1:8770 --no-autoupdate
    ```
 
-   Les appels directs au tunnel sans clé de service sont refusés. Un tunnel temporaire
-   change d'URL au relancement ; c'est Ben qui met à jour Render, pas les visiteurs.
+Un nouveau courtier/serveur peut demander une préparation de son support dans MT5.
+L'acceptation automatique ne signifie pas que tous les courtiers et serveurs du monde
+fonctionnent. Les comptes réels, concours et non-USD restent refusés.
 
-## Basculer Render après vérification du portable
+## Fonctionnement
 
-Conserver la configuration v4 pour revenir au mode précédent si nécessaire.
-Configurer `MT5_HOST_URL` avec l'origine HTTPS du tunnel, `MT5_HOST_KEY` avec la même clé
-que sur le portable, et `PUBLIC_URL` avec l'origine du site sans slash final.
-Pour ce service Docker, définir la commande de démarrage sur `node hosted/proxy.mjs`.
-Ne pas modifier les secrets APP_PASSWORD/SESSION_SECRET de la v4 : ils restent utiles
-pour le retour à l'ancien mode, mais ne servent pas au login MT5 hébergé.
+Render utilise `node hosted/proxy.mjs` comme commande de démarrage et les variables
+`MT5_HOST_URL` (origine HTTPS du tunnel), `MT5_HOST_KEY` (même clé que le portable)
+et `PUBLIC_URL` (origine du site sans slash final). Le relais n'accepte qu'une destination
+trycloudflare.com configurée. Les appels directs au tunnel sans clé sont refusés.
 
-La bascule remplace le login commun par le login MT5 pour tous les visiteurs. Ne pas la
-faire avant la validation sur le portable. Les comptes non préparés sont refusés.
+L'hôte écoute sur 127.0.0.1:8770. Il réserve une instance seulement après validation MT5.
+Chaque compte dispose de son processus Python, terminal, fichiers de risque et journal.
+Les affectations sont sauvegardées atomiquement dans hosted/data/assignments.json.
+Au redémarrage, elles sont relues ; les sessions web sont perdues et les moteurs repartent
+à l'arrêt. Ne pas supprimer ce registre ni les fichiers de risque pour libérer des places.
+L'ancienne configuration accounts.json reste compatible si aucun pool.json n'est présent.
 
-## Recette obligatoire en démo
-
-- Sans session : dashboard et API inaccessibles ; aucun secret dans le navigateur.
-- Identifiants incorrects, compte réel/concours, devise autre qu'USD : refus.
-- Deux comptes préparés : leurs soldes, positions, journaux et commandes restent séparés.
-- La connexion seule n'active pas le moteur. Vérifier les prix et le symbole exact avant
-  une demande Démarrer. Le moteur conserve les limites et contrôles v4.
-- Démarrer/Arrêter : uniquement les nouvelles entrées ; aucune liquidation automatique.
-- En mode supervisé, fermeture du navigateur = pause ; en mode autonome explicitement
-  choisi, fonctionnement possible sans téléphone. Toute interruption de l'hôte peut empêcher
-  l'arrêt distant ; intervenir localement si nécessaire.
-- Couper le tunnel : état inconnu et aucune affirmation mensongère d'arrêt.
-- Redémarrer l'hôte : sessions perdues et moteurs à l'arrêt. Les fichiers de risque restent.
+Le tunnel temporaire peut changer : c'est Ben qui met à jour Render, jamais les visiteurs.
+Ne pas basculer le site avant la recette Windows. La commande v4 `node server.mjs` et
+ses secrets existants restent disponibles pour revenir au mode précédent.
 
 ## Identifiants et limites
 
-Le mot de passe est transmis via HTTPS et le relais de confiance de Ben à MT5. Il n'est
-pas écrit par notre application dans une base, un journal, un cookie ou des arguments de
-processus. MT5 possède son propre stockage local : ne pas promettre qu'aucun identifiant
-n'existe sur le disque du terminal. Protéger les dossiers et le compte Windows de l'hôte.
+Les mots de passe traversent HTTPS et le relais de confiance de Ben. Notre application
+ne les écrit pas dans une base, un cookie, un journal ou des arguments de processus.
+MT5 possède son propre stockage local : protéger les dossiers et l'utilisateur Windows.
+Un vérificateur scrypt reste en mémoire pendant la vie du moteur ; après changement de
+mot de passe, arrêter/revérifier et redémarrer l'hôte. Sessions web : 12 heures maximum.
+Fermer la session ne stoppe pas un moteur autonome ; utiliser Arrêter avant de quitter
+si l'on veut bloquer les nouvelles entrées. Arrêter ne liquide pas les positions ouvertes.
 
-Un vérificateur scrypt est gardé en mémoire pendant la vie du processus pour ouvrir de
-nouvelles sessions du même compte sans perturber le terminal déjà actif. Un changement
-de mot de passe nécessite un arrêt/recontrôle et redémarrage de l'hôte ; les sessions web
-durent au maximum 12 h. Fermer la session web ne stoppe pas un moteur autonome.
+L'isolation est par processus et dossier, pas par machine virtuelle ou utilisateur Windows.
+Un administrateur ou un processus compromis avec ses droits peut atteindre les terminaux.
+Pilote pour un groupe de confiance, pas service public multi-client validé.
+Pas de mesure de capacité réelle, haute disponibilité, service Windows, reprise automatique,
+libération de place, rotation des mots de passe automatisée ou récupération de compte MT5.
 
-Limites : 10 comptes configurables au plus, capacité réelle du portable non mesurée ;
-pas de récupération de mot de passe MT5, inscription libre, service Windows, redémarrage
-automatique, haute disponibilité, historique central ou déploiement public multi-client
-validé. Ne pas réutiliser le même terminal pour du trading manuel ou un autre bot.
-
-## Vérifications automatisées
+## Tests et recette
 
 ```sh
 python -m unittest discover -s hosted -p 'test_*.py' -v
-node --check hosted/proxy.mjs
 node hosted/test-proxy.mjs
+node --check hosted/proxy.mjs
 ```
 
-Ces tests utilisent des acteurs et un module MT5 simulés. Ils ne vérifient pas une
-installation réelle Windows ou l'accès au courtier.
+Tests avec acteurs et MT5 simulés : sessions, CSRF, compte réel/investisseur refusé,
+séparation des comptes, attribution automatique, pas de réservation après mot de passe
+incorrect, saturation, serveurs non pris en charge et reprise des affectations sans secrets.
+
+À vérifier sur Windows avant activation : login avec deux vrais comptes démo distincts,
+soldes/commandes séparés, refus réel et investisseur, état des cotations, aucun démarrage
+au login, Démarrer/Arrêter en démo, état inconnu en cas de coupure du tunnel, et redémarrage
+sans perte des limites de risque. Aucun rendement ni passage d'ordre n'est revendiqué.

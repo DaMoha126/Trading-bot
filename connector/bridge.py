@@ -21,6 +21,7 @@ class DemoBridge:
         self.lock=threading.RLock();self.running=False;self.engine=None;self.symbol=instrument
         self.cfg=self.live_config({});self.events=deque(maxlen=100);self.pin=None;self.last_error=''
         self.last_seen=0;self.last_quote=0;self.commands=deque(maxlen=200)
+        self.analysis_bars=0;self.analysis_warmup=0;self.analysis_at=None;self.cycle_at=None
         self.supervision='browser';self.history=empty_history();self.history_at=0;self.history_account=None
         self.risk=json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         self.last_signal=self.risk.get('last_signal')
@@ -119,6 +120,21 @@ class DemoBridge:
             b.validate()
             if b.time+180<=time.time():bars.append(dict(time=b.time,open=b.open,high=b.high,low=b.low,close=b.close,spread=b.spread))
         return dict(symbol=self.symbol,timeframe='M3',bars=bars,source='MT5',closed_only=True)
+    def diagnostics(self):
+        engine=self.engine
+        last=engine.bars[-1]['time'] if engine and engine.bars else None
+        if not self.running:stage='Moteur arrete'
+        elif engine and engine.position:stage='Position ou ordre existant : aucune nouvelle entree'
+        elif engine and engine.pending:stage='Signal confirme : attente du prochain tick admissible'
+        elif engine and engine.zone:
+            stage='Attente du rejet confirme' if engine.zone['retested'] else 'Attente du premier retest de la zone'
+        elif engine and engine.trend:stage='Attente d une cassure de structure opposee (CHoCH)'
+        else:stage='Attente d une structure directionnelle confirmee'
+        return dict(timeframe='M3',last_bar_open=last,last_bar_close=last+180 if last is not None else None,
+                    warmup_bars=self.analysis_warmup,live_bars=self.analysis_bars,
+                    last_analysis_at=self.analysis_at,last_cycle_at=self.cycle_at,stage=stage,
+                    trend=engine.trend if engine else 0,
+                    zone=dict(engine.zone) if engine and engine.zone else None)
     def snapshot(self):
         self.last_seen=time.time()
         try:
@@ -136,7 +152,7 @@ class DemoBridge:
             return dict(connected=True,running=self.running,account=account,positions=ps,symbol=self.symbol,
                         quote=dict(bid=tick.bid,ask=tick.ask,time=tick.time) if tick else None,
                         price_digits=getattr(info,'digits',2 if self.instrument=='XAUUSD' else 5),instrument=self.instrument,
-                        events=list(self.events),error=self.last_error,halted=self.risk.get('halted',False),history=self.history,
+                        diagnostics=self.diagnostics(),events=list(self.events),error=self.last_error,halted=self.risk.get('halted',False),history=self.history,
                         supervision=self.supervision,connector_version='4.0',equity_curve=list(self.equity_points),
                         time=time.time(),strategy='CHoCH / retest / rejet M3',risk=self.cfg.risk,daily_loss=self.cfg.daily_loss,rr=self.cfg.rr)
         except Exception as ex:
@@ -175,6 +191,8 @@ class DemoBridge:
             for r in sorted(rates,key=lambda r:int(r['time'])):
                 self.engine.feed(Bar(int(r['time']),float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False)
             self.engine.cancel(time.time(),'startup')
+            self.analysis_warmup=len(self.engine.bars);self.analysis_bars=0
+            self.analysis_at=None;self.cycle_at=None
             self.event_cursor=len(self.engine.events)
             self.supervision=supervision
             self.running=True;self.last_seen=time.time();self.last_error=''
@@ -259,7 +277,9 @@ class DemoBridge:
             for r in sorted(rates,key=lambda r:int(r['time'])):
                 ts=int(r['time'])
                 if ts<=self.engine.bars[-1]['time']:continue
-                self.engine.feed(Bar(ts,float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False)
+                if self.engine.feed(Bar(ts,float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False):
+                    self.analysis_bars+=1;self.analysis_at=time.time()
+            self.cycle_at=time.time()
             for event in self.engine.events[getattr(self,'event_cursor',0):]:
                 self.log(event['event'],detail=event.get('reason','Signal de strategie'),**{k:v for k,v in event.items() if k in ('side','level')})
             self.engine.events.clear();self.event_cursor=0

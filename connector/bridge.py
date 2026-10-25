@@ -14,11 +14,14 @@ STATE=Path(__file__).with_name('risk_state.json')
 JOURNAL=Path(__file__).with_name('journal.jsonl')
 
 class DemoBridge:
-    def __init__(self,mt5,state=STATE,journal=JOURNAL):
+    def __init__(self,mt5,state=STATE,journal=JOURNAL,instrument='EURUSD'):
+        if instrument not in ('EURUSD','XAUUSD'):raise ValueError('Instrument non pris en charge.')
+        self.instrument=instrument
         self.mt=mt5;self.state_path=Path(state);self.journal_path=Path(journal)
-        self.lock=threading.RLock();self.running=False;self.engine=None;self.symbol='EURUSD'
-        self.cfg=Config();self.events=deque(maxlen=100);self.pin=None;self.last_error=''
+        self.lock=threading.RLock();self.running=False;self.engine=None;self.symbol=instrument
+        self.cfg=self.live_config({});self.events=deque(maxlen=100);self.pin=None;self.last_error=''
         self.last_seen=0;self.last_quote=0;self.commands=deque(maxlen=200)
+        self.analysis_bars=0;self.analysis_warmup=0;self.analysis_at=None;self.cycle_at=None
         self.supervision='browser';self.history=empty_history();self.history_at=0;self.history_account=None
         self.risk=json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         self.last_signal=self.risk.get('last_signal')
@@ -30,6 +33,15 @@ class DemoBridge:
             if all(isinstance(p,dict) and all(math.isfinite(float(p[k])) for k in ('time','equity')) for p in pts):
                 self.equity_account=saved.get('account');self.equity_points.extend(pts[-2880:])
         except (OSError,ValueError,KeyError,TypeError):pass
+    def live_config(self,values):
+        # Gold allowance is an estimate in USD/ounce, never a Forex pip conversion.
+        defaults=dict(mode='mt5',symbol=self.instrument,slippage=.10 if self.instrument=='XAUUSD' else .00002)
+        return Config(**defaults,**values)
+    def symbol_details(self,symbol):
+        info=self.mt.symbol_info(symbol)
+        if (info is None or info.currency_base!=self.instrument[:3] or info.currency_profit!='USD'):
+            raise ValueError(self.instrument+' uniquement : choisir le symbole exact du courtier, suffixe compris.')
+        return info
     def log(self,event,**data):
         row=dict(time=time.time(),event=event,**data);self.events.append(row)
         with self.journal_path.open('a',encoding='utf8') as f:f.write(json.dumps(row,ensure_ascii=False)+'\n')
@@ -99,8 +111,7 @@ class DemoBridge:
     def candles(self):
         self.account()
         if not self.mt.symbol_select(self.symbol,True):raise ValueError('Symbole indisponible.')
-        info=self.mt.symbol_info(self.symbol)
-        if info is None or info.currency_base!='EUR' or info.currency_profit!='USD':raise ValueError('EURUSD uniquement.')
+        info=self.symbol_details(self.symbol)
         rates=self.mt.copy_rates_from_pos(self.symbol,self.mt.TIMEFRAME_M3,1,10000)
         if rates is None or len(rates)<50:raise ValueError('Historique M3 insuffisant.')
         bars=[]
@@ -109,12 +120,29 @@ class DemoBridge:
             b.validate()
             if b.time+180<=time.time():bars.append(dict(time=b.time,open=b.open,high=b.high,low=b.low,close=b.close,spread=b.spread))
         return dict(symbol=self.symbol,timeframe='M3',bars=bars,source='MT5',closed_only=True)
+    def diagnostics(self):
+        engine=self.engine
+        last=engine.bars[-1]['time'] if engine and engine.bars else None
+        if not self.running:stage='Moteur arrete'
+        elif engine and engine.position:stage='Position ou ordre existant : aucune nouvelle entree'
+        elif engine and engine.pending:stage='Signal confirme : attente du prochain tick admissible'
+        elif engine and engine.zone:
+            stage='Attente du rejet confirme' if engine.zone['retested'] else 'Attente du premier retest de la zone'
+        elif engine and engine.trend:stage='Attente d une cassure de structure opposee (CHoCH)'
+        else:stage='Attente d une structure directionnelle confirmee'
+        return dict(timeframe='M3',last_bar_open=last,last_bar_close=last+180 if last is not None else None,
+                    warmup_bars=self.analysis_warmup,live_bars=self.analysis_bars,
+                    last_analysis_at=self.analysis_at,last_cycle_at=self.cycle_at,stage=stage,
+                    trend=engine.trend if engine else 0,
+                    zone=dict(engine.zone) if engine and engine.zone else None)
     def snapshot(self):
         self.last_seen=time.time()
         try:
             a=self.account();positions=self.mt.positions_get()
             if positions is None:raise ValueError('Lecture des positions indisponible.')
             self.record_equity(a);self.refresh_history(a,positions)
+            self.mt.symbol_select(self.symbol,True)
+            info=self.mt.symbol_info(self.symbol)
             tick=self.mt.symbol_info_tick(self.symbol)
             account=dict(login=str(a.login),server=a.server,balance=a.balance,equity=a.equity,profit=a.profit,
                          margin=a.margin,free_margin=a.margin_free,currency=a.currency,demo=True)
@@ -123,7 +151,8 @@ class DemoBridge:
                      profit=p.profit,owned=p.magic==MAGIC) for p in positions]
             return dict(connected=True,running=self.running,account=account,positions=ps,symbol=self.symbol,
                         quote=dict(bid=tick.bid,ask=tick.ask,time=tick.time) if tick else None,
-                        events=list(self.events),error=self.last_error,halted=self.risk.get('halted',False),history=self.history,
+                        price_digits=getattr(info,'digits',2 if self.instrument=='XAUUSD' else 5),instrument=self.instrument,
+                        diagnostics=self.diagnostics(),events=list(self.events),error=self.last_error,halted=self.risk.get('halted',False),history=self.history,
                         supervision=self.supervision,connector_version='4.0',equity_curve=list(self.equity_points),
                         time=time.time(),strategy='CHoCH / retest / rejet M3',risk=self.cfg.risk,daily_loss=self.cfg.daily_loss,rr=self.cfg.rr)
         except Exception as ex:
@@ -142,25 +171,28 @@ class DemoBridge:
             if self.running:raise ValueError('Bot deja actif. Arreter avant de modifier les reglages.')
             supervision=d.get('supervision','browser')
             if supervision not in ('browser','autonomous'):raise ValueError('Mode de supervision invalide.')
-            symbol=str(d.get('symbol','EURUSD'))
+            symbol=str(d.get('symbol',self.instrument))
             if not 1<=len(symbol)<=40:raise ValueError('Symbole invalide.')
             if not self.mt.symbol_select(symbol,True):raise ValueError('Symbole introuvable dans MT5.')
-            info=self.mt.symbol_info(symbol)
-            if info is None or info.currency_base!='EUR' or info.currency_profit!='USD':raise ValueError('EUR/USD uniquement dans cette version.')
+            info=self.symbol_details(symbol)
             cfg=d.get('config',{})
             if set(cfg)-{'risk','daily_loss','rr'}:raise ValueError('Parametres inconnus.')
-            self.cfg=Config(**cfg)
+            self.cfg=self.live_config(cfg)
             if self.cfg.risk>.01 or self.cfg.daily_loss>.03:raise ValueError('Tests DEMO : risque max 1 %, limite quotidienne max 3 %.')
             self.symbol=symbol;self.pin=(a.login,a.server)
             if self.day_check(a):raise ValueError('Limite quotidienne atteinte. Reprise au prochain jour UTC.')
             tick=self.mt.symbol_info_tick(symbol)
-            if tick is None or time.time()-tick.time>30:raise ValueError('Cotation perimee : marche ferme ou connexion absente.')
+            if (tick is None or not all(math.isfinite(float(v)) for v in (tick.bid,tick.ask,tick.time))
+                    or tick.bid<=0 or tick.ask<tick.bid or time.time()-tick.time>30 or tick.time>time.time()+5):
+                raise ValueError('Cotation perimee ou invalide : marche ferme ou connexion absente.')
             self.engine=Engine(self.cfg)
             rates=self.mt.copy_rates_from_pos(symbol,self.mt.TIMEFRAME_M3,1,300)
             if rates is None or len(rates)<50:raise ValueError('Historique M3 insuffisant (50 bougies minimum).')
             for r in sorted(rates,key=lambda r:int(r['time'])):
                 self.engine.feed(Bar(int(r['time']),float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False)
             self.engine.cancel(time.time(),'startup')
+            self.analysis_warmup=len(self.engine.bars);self.analysis_bars=0
+            self.analysis_at=None;self.cycle_at=None
             self.event_cursor=len(self.engine.events)
             self.supervision=supervision
             self.running=True;self.last_seen=time.time();self.last_error=''
@@ -172,6 +204,7 @@ class DemoBridge:
         return self.snapshot()
     def submit(self,s,tick,info):
         a=self.guard_trade()
+        self.symbol_details(self.symbol)
         if not all(math.isfinite(float(x)) for x in (tick.bid,tick.ask,tick.time)) or tick.bid<=0 or tick.ask<tick.bid or time.time()-tick.time>30 or tick.time>time.time()+5:raise ValueError('Cotation invalide ou perimee.')
         if not all(math.isfinite(float(getattr(info,k))) and getattr(info,k)>0 for k in ('point','volume_step','volume_min','volume_max')):raise ValueError('Metadonnees de volume ou de prix invalides.')
         if not math.isfinite(info.trade_tick_size) or info.trade_tick_size<0:raise ValueError('Taille de tick invalide.')
@@ -194,11 +227,11 @@ class DemoBridge:
             self.log('REJECT',detail='Distance minimale du courtier non respectee.');return
         worst_sl=sl-side*(10*info.point+self.cfg.slippage)
         loss=self.mt.order_calc_profit(kind,self.symbol,1.0,entry,worst_sl)
-        if loss is None or loss>=0:raise ValueError('Calcul du risque MT5 impossible.')
+        if loss is None or not math.isfinite(loss) or loss>=0:raise ValueError('Calcul du risque MT5 impossible.')
         per_lot=abs(loss)+2*self.cfg.commission
         budget=min(a.equity*self.cfg.risk,a.equity-self.risk['baseline']*(1-self.cfg.daily_loss))
         margin=self.mt.order_calc_margin(kind,self.symbol,1.0,entry)
-        if margin is None or margin<=0:raise ValueError('Calcul de marge MT5 impossible.')
+        if margin is None or not math.isfinite(margin) or margin<=0:raise ValueError('Calcul de marge MT5 impossible.')
         raw=min(max(0,budget)/per_lot,a.margin_free*.90/margin,info.volume_max)
         vol=float((Decimal(str(raw))/Decimal(str(info.volume_step))).to_integral_value(rounding=ROUND_FLOOR)*Decimal(str(info.volume_step)))
         if vol<info.volume_min:self.log('REJECT',detail='Lot minimal superieur au budget de risque.');return
@@ -244,7 +277,9 @@ class DemoBridge:
             for r in sorted(rates,key=lambda r:int(r['time'])):
                 ts=int(r['time'])
                 if ts<=self.engine.bars[-1]['time']:continue
-                self.engine.feed(Bar(ts,float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False)
+                if self.engine.feed(Bar(ts,float(r['open']),float(r['high']),float(r['low']),float(r['close']),float(r['spread'])*info.point),now=time.time(),historical=False):
+                    self.analysis_bars+=1;self.analysis_at=time.time()
+            self.cycle_at=time.time()
             for event in self.engine.events[getattr(self,'event_cursor',0):]:
                 self.log(event['event'],detail=event.get('reason','Signal de strategie'),**{k:v for k,v in event.items() if k in ('side','level')})
             self.engine.events.clear();self.event_cursor=0

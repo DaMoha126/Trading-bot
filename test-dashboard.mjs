@@ -10,4 +10,12 @@ const account={demo:true,login:'123',server:'Demo',balance:10000,equity:10001,pr
 render({paired:true,connected:true,running:true,account,connector_version:'4.0',supervision:'autonomous',symbol:'EURUSD',risk:.005,daily_loss:.01,rr:2,events:[],positions:[]});assert.ok(items.get('bot-description').textContent.includes('autonome'));assert.equal(items.get('autonomous').checked,true);assert.equal(items.get('start').disabled,true);
 render({paired:true,connected:false,running:null});assert.equal(items.get('bot-state').textContent,'ÉTAT INCONNU');assert.equal(items.get('stop').disabled,false);assert.equal(items.get('start').disabled,true);
 render({paired:true,connected:true,running:false,account,events:[],positions:[],connector_version:'4.0',history:{status:'ok',trades:[{id:'x',symbol:'EURUSD',side:'BUY',volume:.1,entry:1.1,exit:1.102,closed:Math.floor(Date.now()/1000),commission:-.7,fee:0,swap:-1,net:18.3,reason:'TP',exit_deals:1}],excluded_mixed:0,excluded_incomplete:0}});assert.ok(items.get('history-net').textContent.includes('18,30'));assert.equal(items.get('export-trades').disabled,false);assert.ok(items.get('closed-trades').innerHTML.includes('BUY'));
-assert.ok(html.includes('id="dashboard"'));console.log('PASS: dashboard renders autonomous mode, unknown remote state, closed trade net and export readiness without DOM errors.');
+render({paired:true,connected:true,running:false,account:{...account,login:'gold'},symbol:'XAUUSD',instrument:'XAUUSD',price_digits:2,quote:{bid:2700.12,ask:2700.42,time:Date.now()/1000},positions:[],events:[]});
+assert.equal(items.get('quote-symbol').textContent,'XAUUSD');assert.equal(items.get('symbol').value,'XAUUSD');assert.equal(items.get('bid').textContent,'2700.12');
+render({connected:true,paired:true,running:true,account,symbol:'XAUUSD',positions:[],events:[],time:1000,diagnostics:{last_cycle_at:999,last_bar_close:900,live_bars:2,warmup_bars:80,stage:'Attente du premier retest'}});
+assert.ok(items.get('engine-count').textContent.includes('2'));assert.ok(items.get('engine-stage').textContent.includes('retest'));
+render({connected:true,paired:true,running:true,account,positions:[],events:[],time:1100,diagnostics:{last_cycle_at:999,last_bar_close:900,live_bars:2,warmup_bars:80,stage:'Attente'}});
+assert.ok(items.get('engine-cycle').textContent.includes('à vérifier'));
+render({connected:true,paired:true,running:false,account,positions:[],events:[]});
+assert.ok(items.get('engine-cycle').textContent.includes('mettre à jour'));assert.equal(items.get('engine-count').textContent,'');
+assert.ok(html.includes('id="dashboard"'));console.log('PASS: dashboard renders gold symbol and precision, autonomous mode, unknown remote state, closed trade net and exports.');

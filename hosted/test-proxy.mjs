@@ -17,7 +17,9 @@ function setup(env = {}) {
     await handle(req,out);return out;
   }};
 }
-for (const url of ['http://pilot.trycloudflare.com','https://localhost','https://evil.example','https://pilot.trycloudflare.com/path']) {
+for (const url of ['http://pilot.trycloudflare.com','https://localhost','https://evil.example','https://pilot.trycloudflare.com/path',
+  'https://other.ngrok-free.dev','https://refreeze-throwback-ladder.ngrok-free.dev.evil.example',
+  'https://refreeze-throwback-ladder.ngrok-free.dev:8443','https://refreeze-throwback-ladder.ngrok-free.dev/private']) {
   assert.throws(()=>setup({MT5_HOST_URL:url}));
 }
 const proxy = setup();
@@ -32,4 +34,9 @@ assert.equal(proxy.calls[0].url,'https://pilot.trycloudflare.com/login');
 assert.equal(proxy.calls[0].options.headers.get('authorization'),'Bearer '+'k'.repeat(40));
 assert.equal(proxy.calls[0].options.headers.get('cookie'),'mt5_session=opaque');
 assert.equal(proxy.calls[0].options.redirect,'manual');
+const ngrok=setup({MT5_HOST_URL:'https://refreeze-throwback-ladder.ngrok-free.dev'});
+assert.equal((await ngrok.request('GET','/health',{'ngrok-skip-browser-warning':'attacker',authorization:'attacker'})).status,200);
+assert.equal(ngrok.calls[0].url,'https://refreeze-throwback-ladder.ngrok-free.dev/health');
+assert.equal(ngrok.calls[0].options.headers.get('ngrok-skip-browser-warning'),'1');
+assert.equal(ngrok.calls[0].options.headers.get('authorization'),'Bearer '+'k'.repeat(40));
 console.log('PASS: hosted proxy target allowlist, private routes, methods, body limit, origin, service-key isolation and session forwarding.');

@@ -79,7 +79,21 @@ fonctionnent. Les comptes réels, concours et non-USD restent refusés.
 Render utilise `node hosted/proxy.mjs` comme commande de démarrage et les variables
 `MT5_HOST_URL` (origine HTTPS du tunnel), `MT5_HOST_KEY` (même clé que le portable)
 et `PUBLIC_URL` (origine du site sans slash final). Le relais n'accepte qu'une destination
-trycloudflare.com configurée. Les appels directs au tunnel sans clé sont refusés.
+trycloudflare.com configurée ou l'adresse fixe exacte
+`refreeze-throwback-ladder.ngrok-free.dev`. Les appels directs sans clé sont refusés.
+Pour Ngrok : installer l'agent officiel Windows, configurer son authtoken localement
+(ne jamais le partager), puis lancer :
+
+```powershell
+ngrok http 8770 --url https://refreeze-throwback-ladder.ngrok-free.dev --inspect=false
+```
+
+L'inspection des requêtes est désactivée pour ne pas conserver les mots de passe MT5
+dans l'inspecteur local. Garder MT5_HOST_KEY inchangée et définir MT5_HOST_URL sur
+cette origine HTTPS dans Render après vérification du tunnel. PUBLIC_URL reste
+l'adresse Render. L'adresse fixe ne fournit ni Internet pendant une coupure, ni
+démarrage automatique de Windows. Offre gratuite soumise aux quotas Ngrok ; la
+lecture actuelle du tableau de bord toutes les 5 secondes consomme ces quotas.
 
 L'hôte écoute sur 127.0.0.1:8770. Il réserve une instance seulement après validation MT5.
 Chaque compte dispose de son processus Python, terminal, fichiers de risque et journal.

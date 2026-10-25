@@ -3,7 +3,8 @@ import http from 'node:http';
 const target = new URL(process.env.MT5_HOST_URL || 'http://invalid');
 const key = process.env.MT5_HOST_KEY || '';
 const origin = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
-if (target.protocol !== 'https:' || !/^[-a-z0-9]+\.trycloudflare\.com$/.test(target.hostname)
+const fixedNgrokHost = 'refreeze-throwback-ladder.ngrok-free.dev';
+if (target.protocol !== 'https:' || !(/^[-a-z0-9]+\.trycloudflare\.com$/.test(target.hostname) || target.hostname === fixedNgrokHost)
     || target.username || target.password || target.port || target.pathname !== '/' || target.search || target.hash
     || key.length < 32 || !origin || new URL(origin).origin !== origin) {
   throw Error('Configurer MT5_HOST_URL, MT5_HOST_KEY et PUBLIC_URL pour le pilote heberge.');
@@ -19,6 +20,7 @@ http.createServer(async (req, res) => {
     let size = 0; const chunks = [];
     for await (const chunk of req) {size += chunk.length; if (size > 4096) return fail(413,'Requete trop grande.'); chunks.push(chunk);}
     const headers = new Headers({Authorization:'Bearer '+key});
+    if (target.hostname === fixedNgrokHost) headers.set('ngrok-skip-browser-warning','1');
     for (const name of ['cookie','content-type','origin']) if (req.headers[name]) headers.set(name,req.headers[name]);
     const body = Buffer.concat(chunks);
     const response = await fetch(target.origin + url.pathname + url.search, {

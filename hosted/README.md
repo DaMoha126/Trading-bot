@@ -5,7 +5,14 @@
 Pilote distinct de la v4 en ligne. Chaque visiteur saisit son identifiant MT5, le serveur
 du courtier et le mot de passe de trading. Un compte démo USD valide reçoit automatiquement
 une place disponible : aucune création manuelle de son compte dans un fichier.
-Aucun ordre n'est lancé à la connexion. EUR/USD uniquement pour la stratégie actuelle.
+Aucun ordre n'est lancé à la connexion. XAU/USD uniquement pour le pilote hébergé.
+Le connecteur historique reste EUR/USD. Stratégie CHoCH/retest/rejet M3 inchangée ;
+aucune rentabilité sur l’or validée. Le laboratoire Forex ne convient pas à l’or.
+Lots calculés via order_calc_profit MT5, arrondis vers le bas au pas courtier.
+SL/TP arrondis au tick, avec contrôle de la distance minimale du courtier.
+Provision de glissement : 0,10 USD/once plus 10 points ; commission estimée
+3,50 USD/lot/sens. Hypothèses à vérifier en démo, pas un tarif courtier.
+Gaps, swap et frais réels peuvent dépasser le budget prévu.
 
 Les tests utilisent MT5 simulé. Installation Windows, initialisation des copies MT5,
 connexion au courtier et exécution en démo restent à vérifier avant la bascule du site.

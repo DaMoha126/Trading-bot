@@ -41,7 +41,7 @@ def main():
             password = None
         data = Path(setup['data'])
         data.mkdir(parents=True, exist_ok=True)
-        bridge = DemoBridge(mt, state=data / 'risk_state.json', journal=data / 'journal.jsonl')
+        bridge = DemoBridge(mt, state=data / 'risk_state.json', journal=data / 'journal.jsonl', instrument='XAUUSD')
         bridge.pin = (int(setup['login']), setup['server'])
         print(json.dumps({'ok': True}), flush=True)
         done = threading.Event()
@@ -67,8 +67,10 @@ def main():
                     else:
                         raise ValueError('Commande inconnue.')
                 print(json.dumps({'ok': True, 'data': result}, allow_nan=False), flush=True)
-            except (ValueError, TypeError, KeyError):
-                print(json.dumps({'ok': False, 'error': 'Commande refusee. Verifie le symbole, les cotations et les autorisations MT5.'}), flush=True)
+            except ValueError as error:
+                print(json.dumps({'ok': False, 'error': str(error)[:300]}), flush=True)
+            except (TypeError, KeyError):
+                print(json.dumps({'ok': False, 'error': 'Parametres de commande invalides.'}), flush=True)
         done.set()
     except Exception:
         print(json.dumps({'ok': False, 'error': 'Connexion MT5 indisponible ou compte non autorise.'}), flush=True)

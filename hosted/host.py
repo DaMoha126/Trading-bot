@@ -244,6 +244,8 @@ LOGIN = LOGIN.replace('Ton compte doit être préparé par Ben.', 'Attribution a
 
 def dashboard():
     html = (PUBLIC / 'control.html').read_text(encoding='utf8')
+    html = html.replace('EUR/USD', 'XAU/USD').replace('EURUSD', 'XAUUSD')
+    html = html.replace('<a class="download" href="/lab/index.html?source=mt5">Tester l’historique M3 du compte ↗</a>', '<span class="hint">Backtest XAUUSD non disponible : le laboratoire Forex ne convient pas à l’or.</span>')
     # Retain hidden legacy DOM IDs for control.js, but remove local-connector instructions.
     html = re.sub(r'<details class="first-run-guide".*?(?=<section class="account-status">)', '', html, count=1)
     html = re.sub(r'<section class="rules".*?</section>', '', html, count=1)
@@ -337,11 +339,11 @@ def handler(hub, proxy_key, origin):
                 try:
                     result = actor.rpc(request)
                     return self.reply(200, {**result, 'paired': True, 'hosted': True})
-                except (ValueError, OSError):
+                except (ValueError, OSError) as error:
                     if self.command == 'GET':
                         return self.reply(200, {'paired': True, 'connected': False, 'running': None,
                                                'error': 'Instance MT5 indisponible. Contacter Ben.'})
-                    return self.reply(400, {'error': 'Commande refusee. Verifie le symbole, les cotations et les autorisations MT5. En cas de delai, verifie le terminal avant de recommencer.'})
+                    return self.reply(400, {'error': str(error)[:300] if isinstance(error,ValueError) else 'Instance MT5 indisponible. Verifier le terminal avant de recommencer.'})
             if self.command != 'GET':
                 return self.reply(405, {'error': 'Methode refusee.'})
             if path in ('/', '/control.html'):

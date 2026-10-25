@@ -40,8 +40,9 @@ class Config:
     leverage: float = 30.0
 
     def __post_init__(self):
-        if self.mode != 'simulation' or self.symbol != 'EURUSD':
-            raise ValueError('V1: simulation EURUSD uniquement, capital en USD.')
+        if not ((self.mode == 'simulation' and self.symbol == 'EURUSD') or
+                (self.mode == 'mt5' and self.symbol in ('EURUSD', 'XAUUSD'))):
+            raise ValueError('Simulation EURUSD ou moteur MT5 EURUSD/XAUUSD requis.')
         for key, val in asdict(self).items():
             if isinstance(val, (float, int)) and (isinstance(val, bool) or not math.isfinite(val)):
                 raise ValueError('Parametre non fini: ' + key)
@@ -249,6 +250,8 @@ class Engine:
             self.zone=None
 
     def feed(self, b, now=None, historical=True):
+        if historical and self.cfg.mode != 'simulation':
+            raise ValueError('Le simulateur Forex ne calcule pas les performances MT5/XAUUSD.')
         b.validate()
         if now is not None and b.time+STEP>now:
             return False  # unfinished candle

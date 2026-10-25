@@ -130,6 +130,9 @@ class HostTest(unittest.TestCase):
 
     def test_dashboard_retains_required_ids_without_installation_guide(self):
         html = dashboard().decode()
+        self.assertIn('value="XAUUSD"', html)
+        self.assertIn('XAU/USD', html)
+        self.assertNotIn('href="/lab/index.html?source=mt5"', html)
         self.assertNotIn('Première connexion ? Configure', html)
         self.assertNotIn('section class="rules"', html)
         self.assertIn('Compte MT5 hébergé', html)

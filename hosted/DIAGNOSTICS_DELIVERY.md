@@ -20,3 +20,15 @@ Installation : arrêter l'hôte, exécuter le script UPDATE_XAUUSD.ps1 existant 
 télécharge les fichiers actualisés de cette branche, relancer l'hôte avec la clé
 existante. Garder Ngrok ouvert. Ne pas modifier les affectations ou états de risque.
 Cette mise à jour ne modifie pas les règles d'entrée et ne démarre aucun moteur.
+
+## Extension du 26 octobre
+
+Affichage de la tendance, du dernier sommet/creux confirmé et de leur heure UTC,
+du sens/niveau/heure du dernier CHoCH détecté après démarrage et de la zone encore
+active (limites, sens, retest). Le journal affiche sens et niveau même en présence
+d'un message générique. Un CHoCH historique du chargement initial n'est pas présenté
+comme un nouveau signal. Le dernier CHoCH reste consultable après disparition de
+la zone ; l'interface indique explicitement qu'aucune zone n'est active.
+52 tests connector et 16 hosted passent, plus tests Node tableau de bord/relais.
+Niveaux issus du moteur actuel, sans changement des règles d'entrée. Aucun ordre
+courtier exécuté par ces tests. Vérification visuelle sur MT5 démo encore nécessaire.

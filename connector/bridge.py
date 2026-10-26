@@ -22,6 +22,7 @@ class DemoBridge:
         self.cfg=self.live_config({});self.events=deque(maxlen=100);self.pin=None;self.last_error=''
         self.last_seen=0;self.last_quote=0;self.commands=deque(maxlen=200)
         self.analysis_bars=0;self.analysis_warmup=0;self.analysis_at=None;self.cycle_at=None
+        self.last_choch=None
         self.supervision='browser';self.history=empty_history();self.history_at=0;self.history_account=None
         self.risk=json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         self.last_signal=self.risk.get('last_signal')
@@ -134,6 +135,9 @@ class DemoBridge:
                     warmup_bars=self.analysis_warmup,live_bars=self.analysis_bars,
                     last_analysis_at=self.analysis_at,last_cycle_at=self.cycle_at,stage=stage,
                     trend=engine.trend if engine else 0,
+                    last_choch=dict(self.last_choch) if self.last_choch else None,
+                    swing_high=list(engine.highs[-1]) if engine and engine.highs else None,
+                    swing_low=list(engine.lows[-1]) if engine and engine.lows else None,
                     zone=dict(engine.zone) if engine and engine.zone else None)
     def snapshot(self):
         self.last_seen=time.time()
@@ -193,6 +197,7 @@ class DemoBridge:
             self.engine.cancel(time.time(),'startup')
             self.analysis_warmup=len(self.engine.bars);self.analysis_bars=0
             self.analysis_at=None;self.cycle_at=None
+            self.last_choch=None
             self.event_cursor=len(self.engine.events)
             self.supervision=supervision
             self.running=True;self.last_seen=time.time();self.last_error=''
@@ -281,6 +286,10 @@ class DemoBridge:
                     self.analysis_bars+=1;self.analysis_at=time.time()
             self.cycle_at=time.time()
             for event in self.engine.events[getattr(self,'event_cursor',0):]:
+                if event['event']=='CHOCH':
+                    self.last_choch={k:event[k] for k in ('time','side','level','pivot_time') if k in event}
+                    if isinstance(self.last_choch.get('time'),str):
+                        self.last_choch['time']=datetime.fromisoformat(self.last_choch['time']).timestamp()
                 self.log(event['event'],detail=event.get('reason','Signal de strategie'),**{k:v for k,v in event.items() if k in ('side','level')})
             self.engine.events.clear();self.event_cursor=0
             self.engine.bars=self.engine.bars[-1000:];self.engine.used=self.engine.used[-1000:]

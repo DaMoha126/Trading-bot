@@ -18,4 +18,7 @@ render({connected:true,paired:true,running:true,account,positions:[],events:[],t
 assert.ok(items.get('engine-cycle').textContent.includes('à vérifier'));
 render({connected:true,paired:true,running:false,account,positions:[],events:[]});
 assert.ok(items.get('engine-cycle').textContent.includes('mettre à jour'));assert.equal(items.get('engine-count').textContent,'');
+render({connected:true,paired:true,running:true,account,positions:[],price_digits:2,events:[{event:'CHOCH',detail:'Signal de strategie',side:-1,level:4000,time:1000}],diagnostics:{trend:-1,last_choch:{side:-1,level:4000,time:1000},swing_high:[900,4010],swing_low:[900,3990],zone:{side:-1,low:3999,high:4001,retested:false}}});
+assert.ok(items.get('engine-choch').textContent.includes('SELL'));assert.ok(items.get('engine-zone').textContent.includes('3999.00 à 4001.00'));
+assert.ok(items.get('events').innerHTML.includes('Niveau : 4000'));assert.ok(items.get('events').innerHTML.includes('SELL'));
 assert.ok(html.includes('id="dashboard"'));console.log('PASS: dashboard renders gold symbol and precision, autonomous mode, unknown remote state, closed trade net and exports.');

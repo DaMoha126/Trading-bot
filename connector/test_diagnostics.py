@@ -51,4 +51,25 @@ class DiagnosticTests(unittest.TestCase):
         self.assertFalse(self.b.running);self.assertEqual(self.b.cycle_at,last)
         self.assertEqual(self.b.analysis_bars,0)
 
+    def test_live_choch_survives_event_flush_and_zone_removal(self):
+        self.b.command(dict(action='start',id='diagnostic-choch',supervision='autonomous'))
+        self.assertIsNone(self.b.diagnostics()['last_choch'])
+        ts=int(time.time())//180*180
+        self.b.engine.log('CHOCH',ts,side=-1,level=1.099,pivot_time=ts-900)
+        self.b.step()
+        self.assertEqual(self.b.diagnostics()['last_choch']['side'],-1)
+        self.assertEqual(self.b.diagnostics()['last_choch']['level'],1.099)
+        self.b.engine.zone=None;self.b.step()
+        self.assertIsNone(self.b.diagnostics()['zone'])
+        self.assertEqual(self.b.diagnostics()['last_choch']['time'],ts)
+        self.assertEqual(self.mt.sent,[])
+
+    def test_structure_exposes_confirmed_pivots_without_mutating_engine(self):
+        self.b.command(dict(action='start',id='diagnostic-pivots'))
+        self.b.engine.highs=[[180,1.12]];self.b.engine.lows=[[360,1.10]]
+        d=self.b.diagnostics();self.assertEqual(d['swing_high'],[180,1.12])
+        self.assertEqual(d['swing_low'],[360,1.10])
+        d['swing_high'][1]=999
+        self.assertEqual(self.b.engine.highs[-1][1],1.12)
+
 if __name__=='__main__':unittest.main()

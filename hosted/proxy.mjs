@@ -39,7 +39,11 @@ http.createServer(async (req, res) => {
       if (received > 3000000) return fail(502,'Reponse trop grande.');
       parts.push(Buffer.from(chunk));
     }
-    const data = Buffer.concat(parts);
+    let data = Buffer.concat(parts);
+    // Neutral branding also applies while the Windows host runs an older version.
+    if (/text\/html|application\/json|javascript/.test(response.headers.get('content-type') || '')) {
+      data = Buffer.from(data.toString('utf8').replaceAll('serveur de Ben','serveur MT5').replaceAll('Contacter Ben.','Contacter l’administrateur.').replaceAll('Ben Dao','Trading Bot').replaceAll('préparé par Ben.','préparé par l’administrateur.').replaceAll('class="avatar">BD','class="avatar">TB'));
+    }
     res.writeHead(response.status,out);res.end(data);
-  } catch {if (!res.headersSent) fail(503,'Serveur MT5 indisponible. Verifie le portable de Ben.'); else res.end();}
+  } catch {if (!res.headersSent) fail(503,'Serveur MT5 indisponible. Verifie le serveur MT5.'); else res.end();}
 }).listen(Number(process.env.PORT || 3000),'0.0.0.0');

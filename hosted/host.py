@@ -236,10 +236,10 @@ class Hub:
             actor.close()
 
 
-LOGIN = '''<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trading Bot · Connexion MT5</title><style>body{margin:0;background:#050907;color:#e9e7d9;font:15px system-ui;display:grid;min-height:100vh;place-items:center}main{box-sizing:border-box;width:min(430px,92vw);padding:30px;border:1px solid #665730;border-radius:16px}h1{color:#dfc16b}label{display:block;margin:18px 0}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:6px;margin-top:7px}input{background:#111911;color:white;border:1px solid #46503b}button{background:#41d9ae;border:0;font-weight:bold}p{font-size:13px;line-height:1.7;color:#b6c3af}.error{color:#ffb1ab}</style><main><h1>Trading Bot</h1><p>Relie ton compte MT5 démo. Le moteur fonctionne sur le serveur de Ben : aucune installation sur ton téléphone.</p>ERROR<form action="/login" method="post"><label>Identifiant MT5<input name="login" inputmode="numeric" pattern="[0-9]{1,18}" maxlength="18" autocomplete="username" required></label><label>Serveur du courtier<input name="server" maxlength="100" placeholder="Exemple : Deriv-Demo" required></label><label>Mot de passe de trading MT5<input name="password" type="password" maxlength="256" autocomplete="current-password" required></label><button>Connecter mon compte →</button></form><p>Pilote démo USD uniquement. Ton compte doit être préparé par Ben. Aucun ordre n’est lancé à la connexion.</p></main></html>'''
+LOGIN = '''<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trading Bot · Connexion MT5</title><style>body{margin:0;background:#050907;color:#e9e7d9;font:15px system-ui;display:grid;min-height:100vh;place-items:center}main{box-sizing:border-box;width:min(430px,92vw);padding:30px;border:1px solid #665730;border-radius:16px}h1{color:#dfc16b}label{display:block;margin:18px 0}input,button{box-sizing:border-box;width:100%;padding:13px;border-radius:6px;margin-top:7px}input{background:#111911;color:white;border:1px solid #46503b}button{background:#41d9ae;border:0;font-weight:bold}p{font-size:13px;line-height:1.7;color:#b6c3af}.error{color:#ffb1ab}</style><main><h1>Trading Bot</h1><p>Relie ton compte MT5 démo. Le moteur fonctionne sur le serveur MT5 : aucune installation sur ton téléphone.</p>ERROR<form action="/login" method="post"><label>Identifiant MT5<input name="login" inputmode="numeric" pattern="[0-9]{1,18}" maxlength="18" autocomplete="username" required></label><label>Serveur du courtier<input name="server" maxlength="100" placeholder="Exemple : Deriv-Demo" required></label><label>Mot de passe de trading MT5<input name="password" type="password" maxlength="256" autocomplete="current-password" required></label><button>Connecter mon compte →</button></form><p>Pilote démo USD uniquement. Ton compte doit être préparé par l’administrateur. Aucun ordre n’est lancé à la connexion.</p></main></html>'''
 
 
-LOGIN = LOGIN.replace('Ton compte doit être préparé par Ben.', 'Attribution automatique selon les places et serveurs disponibles.')
+LOGIN = LOGIN.replace('Ton compte doit être préparé par l’administrateur.', 'Attribution automatique selon les places et serveurs disponibles.')
 
 
 def dashboard():
@@ -251,8 +251,8 @@ def dashboard():
     html = re.sub(r'<section class="rules".*?</section>', '', html, count=1)
     html = html.replace('<section class="panel setup" id="setup">', '<section class="panel setup" id="setup" hidden>')
     html = html.replace('<head>', '<head><style>#setup,#guide,#remove-account,footer a[href="#guide"],a[href="#setup"]{display:none!important}</style>')
-    html = html.replace('Le PC et MT5 doivent rester ouverts.', 'Le serveur de Ben doit rester actif.')
-    html = html.replace('Le PC, MT5 et le connecteur doivent rester ouverts.', 'Le serveur de Ben doit rester actif.')
+    html = html.replace('Le PC et MT5 doivent rester ouverts.', 'Le serveur MT5 doit rester actif.')
+    html = html.replace('Le PC, MT5 et le connecteur doivent rester ouverts.', 'Le serveur MT5 doit rester actif.')
     html = html.replace('<main id="dashboard">', '<main id="dashboard"><p class="hint">Compte MT5 hébergé · Démo uniquement · <a href="/logout">Déconnexion</a>. Déconnexion du site : le mode autonome peut continuer sur le serveur.</p>')
     return html.encode()
 
@@ -342,7 +342,7 @@ def handler(hub, proxy_key, origin):
                 except (ValueError, OSError) as error:
                     if self.command == 'GET':
                         return self.reply(200, {'paired': True, 'connected': False, 'running': None,
-                                               'error': 'Instance MT5 indisponible. Contacter Ben.'})
+                                               'error': 'Instance MT5 indisponible. Contacter l’administrateur.'})
                     return self.reply(400, {'error': str(error)[:300] if isinstance(error,ValueError) else 'Instance MT5 indisponible. Verifier le terminal avant de recommencer.'})
             if self.command != 'GET':
                 return self.reply(405, {'error': 'Methode refusee.'})
@@ -356,8 +356,8 @@ def handler(hub, proxy_key, origin):
                 return self.reply(404, {'error': 'Introuvable.'})
             data = file.read_bytes()
             if path == '/control.js':
-                text = data.decode().replace('Le PC, MT5 et le connecteur', 'Le serveur de Ben')
-                text = text.replace('Garde le PC, MT5 et le connecteur ouverts.', 'Le moteur reste sur le serveur de Ben.')
+                text = data.decode().replace('Le PC, MT5 et le connecteur', 'Le serveur MT5')
+                text = text.replace('Garde le PC, MT5 et le connecteur ouverts.', 'Le moteur reste sur le serveur MT5.')
                 text = text.replace('Le connecteur doit être actif sur ton PC pour démarrer.', 'Le serveur MT5 doit être disponible pour démarrer.')
                 data = text.encode()
             return self.reply(200, data, mimetypes.guess_type(str(file))[0] or 'application/octet-stream')

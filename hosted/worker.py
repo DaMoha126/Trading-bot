@@ -31,7 +31,7 @@ def authenticate(mt, config, password):
 
 def main():
     import MetaTrader5 as mt
-    from bridge import DemoBridge
+    from scalping_bridge import ScalpingBridge
     setup = json.loads(sys.stdin.readline())
     try:
         password = setup.pop('password')
@@ -41,7 +41,7 @@ def main():
             password = None
         data = Path(setup['data'])
         data.mkdir(parents=True, exist_ok=True)
-        bridge = DemoBridge(mt, state=data / 'risk_state.json', journal=data / 'journal.jsonl', instrument='XAUUSD')
+        bridge = ScalpingBridge(mt, state=data / 'risk_state.json', journal=data / 'journal.jsonl')
         bridge.pin = (int(setup['login']), setup['server'])
         print(json.dumps({'ok': True}), flush=True)
         done = threading.Event()

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test-connection-cookie.mjs && node test-bridge-service.mjs && node test-origin.mjs && node test-server.mjs && node test-dashboard.mjs && node test-backtest.cjs"
+    "test": "node test-connection-cookie.mjs && node test-bridge-service.mjs && node test-origin.mjs && node test-server.mjs && node test-dashboard.mjs && node test-backtest.cjs",
+    "test:relay": "node --test hosted/test-relay.mjs"
   }
 }

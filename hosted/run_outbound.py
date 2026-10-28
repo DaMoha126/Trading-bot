@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 from urllib.error import URLError
-from outbound import Agent,configuration
+from outbound import Agent,configuration,diagnostic
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -40,8 +40,8 @@ def main():
                 if disconnected:print('Liaison rétablie. Aucune ancienne commande rejouée.',flush=True)
                 disconnected=False
                 time.sleep(1)
-            except (OSError,ValueError,URLError):
-                if not disconnected:print('Render indisponible ou clé refusée : nouvelle tentative automatique. Vérifier MT5 avant de renvoyer une commande.',flush=True)
+            except (OSError,ValueError,URLError) as error:
+                if not disconnected:print(diagnostic(error),flush=True)
                 disconnected=True;time.sleep(5)
         raise ValueError('Le service MT5 s’est arrêté. Aucun redémarrage automatique du bot.')
     finally:

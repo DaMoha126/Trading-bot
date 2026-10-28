@@ -2,7 +2,7 @@ import base64,io,json,threading,time,unittest
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.request import build_opener,ProxyHandler
 from urllib.error import URLError
-from outbound import Agent,NoRedirect
+from outbound import Agent,NoRedirect,RelayHTTPError,diagnostic
 
 class Local(BaseHTTPRequestHandler):
     calls=[]
@@ -27,6 +27,12 @@ class OutboundTest(unittest.TestCase):
         self.a=Agent('https://bot.example','test-key-only'*4,self.server.server_port)
     def job(self,**values):
         return dict(id='example-job',method='GET',path='/login',headers={},body='',deadline=25000,serverTime=0,**values)
+    def test_diagnostics_distinguish_key_network_and_hide_secrets(self):
+        self.assertIn('401',diagnostic(RelayHTTPError(401)))
+        self.assertIn('autre liaison',diagnostic(RelayHTTPError(409)))
+        self.assertIn('réseau',diagnostic(URLError('test-only-private-value')))
+        self.assertNotIn('test-only-private-value',diagnostic(ValueError('Bearer test-only-private-value')))
+
     def test_cookie_redirect_and_auth_forwarding(self):
         out=self.a.forward(self.job())
         self.assertEqual(out['status'],303);self.assertIn('HttpOnly',out['headers']['set-cookie'])

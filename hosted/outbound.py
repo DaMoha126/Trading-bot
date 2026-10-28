@@ -8,6 +8,7 @@ import base64
 from collections import deque
 import json
 import os
+import ssl
 import time
 import uuid
 from urllib.error import HTTPError, URLError
@@ -15,6 +16,30 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 ALLOWED={'/','/login','/logout','/control.html','/control.css','/control.js','/guide.css','/api/bridge','/lab/index.html','/lab/app.js','/lab/style.css','/lab/engine.js','/lab/worker.js','/lab/demo.csv'}
+
+class RelayHTTPError(ValueError):
+    def __init__(self, status):
+        self.status=int(status)
+        super().__init__('HTTP '+str(self.status))
+
+def diagnostic(error):
+    """Return only curated diagnostics; never print exception text or headers."""
+    if isinstance(error,RelayHTTPError):
+        explanations={401:'Clé de liaison refusée (HTTP 401). Recopier la valeur MT5_HOST_KEY du service Render, sans la modifier.',
+                      403:'Accès refusé (HTTP 403). Vérifier l’adresse du site.',
+                      409:'Une autre liaison du PC est déjà active (HTTP 409). Fermer les autres lanceurs et attendre 35 secondes.',
+                      404:'Relais introuvable (HTTP 404). Vérifier PUBLIC_URL et la version déployée sur Render.',
+                      410:'Réponse expirée (HTTP 410). Ne pas renvoyer la commande ; vérifier MT5.',
+                      502:'Passerelle Render indisponible (HTTP 502). Nouvelle tentative automatique.',
+                      503:'Render temporairement indisponible (HTTP 503). Nouvelle tentative automatique.'}
+        return explanations.get(error.status,'Relais refusé (HTTP '+str(error.status)+').')
+    reason=error.reason if isinstance(error,URLError) else error
+    if isinstance(reason,ssl.SSLCertVerificationError):
+        return 'Certificat HTTPS non validé par Python. Vérifier date/heure et certificats du PC ; ne pas désactiver la vérification TLS.'
+    if isinstance(reason,ssl.SSLError):return 'Connexion HTTPS interrompue (TLS). Vérifier réseau et certificats du PC.'
+    if isinstance(reason,TimeoutError):return 'Délai réseau dépassé. Vérifier Internet ; Render peut être en cours de démarrage.'
+    if isinstance(error,(URLError,OSError)):return 'Connexion réseau impossible. Vérifier Internet, pare-feu et accès HTTPS au site.'
+    return 'Réponse de liaison invalide. Mettre à jour le lanceur ; vérifier MT5 avant toute nouvelle commande.'
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):return None
@@ -52,7 +77,7 @@ class Agent:
                 return job
         except HTTPError as ex:
             # Never follow a remote redirect with the private key.
-            raise ValueError('Liaison refusée par Render (HTTP '+str(ex.code)+').') from None
+            raise RelayHTTPError(ex.code) from None
 
     def forward(self, job, local_opener=None):
         ident=job.get('id')
@@ -109,8 +134,8 @@ def main():
             if interrupted:print('Liaison rétablie. Aucune commande antérieure rejouée.',flush=True)
             interrupted=False
             time.sleep(1)
-        except (OSError,ValueError,URLError):
-            if not interrupted:print('Liaison indisponible : reconnexion automatique. Vérifier MT5 avant de renvoyer une commande.',flush=True)
+        except (OSError,ValueError,URLError) as error:
+            if not interrupted:print(diagnostic(error),flush=True)
             interrupted=True
             time.sleep(5)
 

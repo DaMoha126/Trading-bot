@@ -47,9 +47,20 @@ class ScalpingBridge(DemoBridge):
 
     def _quote(self):
         t=self.mt.symbol_info_tick(self.symbol)
-        if (t is None or not all(math.isfinite(float(v)) for v in (t.bid,t.ask,t.time))
-            or t.bid<=0 or t.ask<t.bid or time.time()-t.time>10 or t.time>time.time()+5):
-            raise ValueError('Cotation indisponible ou périmée.')
+        if t is None:
+            raise ValueError('Aucun prix renvoyé par cette instance MT5 pour '+self.symbol+'.')
+        try:
+            valid=all(math.isfinite(float(v)) for v in (t.bid,t.ask,t.time)) and t.bid>0 and t.ask>=t.bid and t.time>0
+        except (ValueError,TypeError,AttributeError):
+            valid=False
+        if not valid:
+            raise ValueError('Prix Bid/Ask ou horodatage invalide pour '+self.symbol+'.')
+        now=time.time();age=now-t.time
+        if age>10 or age < -5:
+            tick_utc=datetime.fromtimestamp(t.time,timezone.utc).strftime('%H:%M:%S')
+            pc_utc=datetime.fromtimestamp(now,timezone.utc).strftime('%H:%M:%S')
+            reason=('Prix ancien de '+str(round(age,1))+' s (limite 10 s)') if age>10 else ('Prix daté dans le futur de '+str(round(-age,1))+' s (tolérance 5 s)')
+            raise ValueError(reason+' pour '+self.symbol+'. Prix UTC '+tick_utc+' ; PC UTC '+pc_utc+'. Vérifier flux et horloge de cette instance.')
         return t
 
     def _send(self, request, label):

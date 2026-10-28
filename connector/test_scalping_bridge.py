@@ -83,6 +83,20 @@ class TestScalp(unittest.TestCase):
   self.submit(); self.mt.fail_send=True
   with self.assertRaises(ValueError):self.b.close_owned(self.mt.positions,self.mt.tick,self.mt.info)
   self.assertEqual(len(self.mt.positions),3)
+ def test_missing_quote_identified(self):
+  self.mt.tick=None
+  with self.assertRaisesRegex(ValueError,'Aucun prix'):self.b._quote()
+ def test_invalid_quote_identified(self):
+  self.mt.tick.bid=float('nan')
+  with self.assertRaisesRegex(ValueError,'invalide'):self.b._quote()
+ def test_old_quote_reports_age_without_accepting_it(self):
+  self.mt.tick.time=int(time.time())-45
+  with self.assertRaisesRegex(ValueError,'Prix ancien.*Prix UTC.*PC UTC'):self.b._quote()
+ def test_future_quote_reports_clock_difference(self):
+  self.mt.tick.time=int(time.time())+3600
+  with self.assertRaisesRegex(ValueError,'futur.*Prix UTC.*PC UTC'):self.b._quote()
+ def test_recent_quote_accepted(self):
+  self.assertIs(self.b._quote(),self.mt.tick)
  def test_start_no_order(self):
   self.b.command(dict(action='start',id='command-123',symbol='XAUUSD'))
   self.assertTrue(self.b.running);self.assertEqual(self.mt.sent,[])

@@ -61,7 +61,7 @@ def main():
                         result = bridge.snapshot()
                     elif action == 'candles':
                         result = bridge.candles()
-                    elif action in ('start', 'stop'):
+                    elif action in ('start', 'stop', 'settings'):
                         bridge.command(request)
                         result = bridge.snapshot()
                     else:

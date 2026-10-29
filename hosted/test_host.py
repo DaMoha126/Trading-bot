@@ -121,6 +121,7 @@ class HostTest(unittest.TestCase):
             self.assertEqual(request('GET', '/hosted/accounts.json', **private)[0], 404)
             self.assertEqual(request('GET', '/lab/engine.js', **private)[0], 200)
             self.assertEqual(request('POST', '/api/bridge', json.dumps({'action': 'pair', 'login': '2'}), Origin=origin, **{**private, 'Content-Type': 'application/json'})[0], 400)
+            self.assertEqual(request('POST', '/api/bridge', json.dumps({'action':'settings','id':'settings-test-123','config':{'positions':2}}), Origin=origin, **{**private,'Content-Type':'application/json'})[0],200)
             self.assertEqual(request('POST', '/logout', b'', Origin=origin, **private)[0], 303)
             self.assertEqual(request('GET', '/api/bridge', **private)[0], 401)
         finally:

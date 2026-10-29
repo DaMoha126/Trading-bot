@@ -12,25 +12,32 @@ from bridge import DemoBridge
 from structure_m1 import Bar, StructureM1
 from liquidity_signal import signal
 from trade_history import aggregate_deals, empty_history
+from scalping_settings import validate_settings,session_open
 
 MAGIC_SCALP=26102701
 
 class ScalpingBridge(DemoBridge):
     def __init__(self, mt5, state, journal):
         super().__init__(mt5, state, journal, instrument='XAUUSD')
-        self.cfg=self.live_config({'risk':.005, 'daily_loss':.02})
+        a=self.account()
+        saved=self.risk.get('accounts',{}).get(f'{a.login}@{a.server}',{}).get('scalp_settings',{})
+        self.options=validate_settings(saved)
+        self.apply_settings()
         self.structure=None
         self.previous_bid=None
         self.quote_id=None
         self.resume_after=0
         self.last_structure=None
         self.last_seen_bar=None
-        self.penetration=.10
-        self.stop_distance=1.0
-        self.max_spread=.5
         self.pending_closure=False
         self.be_tickets=set()
         self.had_owned=False
+
+    def apply_settings(self):
+        self.cfg=self.live_config({k:self.options[k] for k in ('risk','daily_loss')})
+        self.penetration=self.options['penetration']
+        self.stop_distance=self.options['stop_distance']
+        self.max_spread=self.options['max_spread']
 
     def hedge_account(self):
         a=self.guard_trade()
@@ -78,7 +85,16 @@ class ScalpingBridge(DemoBridge):
         ident=d.get('id'); action=d.get('action')
         if not isinstance(ident,str) or not 10<=len(ident)<=80: raise ValueError('Identifiant de commande requis.')
         if ident in self.commands: return self.snapshot()
-        if action=='stop':
+        if action=='settings':
+            if self.running:raise ValueError('Arrête le bot avant de modifier les réglages.')
+            a=self.account()
+            options=validate_settings(d.get('config',{}))
+            self.day_check(a)
+            self.risk['accounts'][f'{a.login}@{a.server}']['scalp_settings']=options
+            self.persist()
+            self.options=options;self.apply_settings()
+            self.log('SETTINGS',detail='Réglages enregistrés pour le prochain démarrage.')
+        elif action=='stop':
             self.running=False
             self.log('STOP',detail='Entrées et gestion actives suspendues ; SL/TP restent chez le courtier.')
         elif action=='start':
@@ -96,7 +112,7 @@ class ScalpingBridge(DemoBridge):
             if supervision not in ('browser','autonomous'): raise ValueError('Supervision invalide.')
             rates=self.mt.copy_rates_from_pos(symbol,self.mt.TIMEFRAME_M1,1,300)
             if rates is None or len(rates)<50: raise ValueError('Historique M1 insuffisant.')
-            engine=StructureM1(2)
+            engine=StructureM1(self.options['pivot'])
             for r in sorted(rates,key=lambda x:int(x['time'])):
                 ts=int(r['time'])
                 if ts+60>time.time(): continue
@@ -133,14 +149,15 @@ class ScalpingBridge(DemoBridge):
         if loss is None or margin is None or not math.isfinite(loss) or not math.isfinite(margin) or loss>=0 or margin<=0:
             raise ValueError('Calcul de risque ou de marge impossible.')
         cost=abs(loss)+2*self.cfg.commission
-        budget=min(a.equity*.005,a.equity-self.risk['baseline']*.98)
-        raw=min(max(0,budget)/(3*cost),a.margin_free*.90/(3*margin),info.volume_max)
+        budget=min(a.equity*self.cfg.risk,a.equity-self.risk['baseline']*(1-self.cfg.daily_loss))
+        count=self.options['positions']
+        raw=min(max(0,budget)/(count*cost),a.margin_free*.90/(count*margin),info.volume_max)
         vol=float((Decimal(str(raw))/Decimal(str(info.volume_step))).to_integral_value(rounding=ROUND_FLOOR)*Decimal(str(info.volume_step)))
         if vol<info.volume_min:
-            self.log('REJECT',detail='Lot minimal trop élevé pour trois positions et le budget de risque.');return
+            self.log('REJECT',detail='Lot minimal trop élevé pour la série et le budget de risque.');return
         fill=self.mt.ORDER_FILLING_FOK if info.filling_mode&1 else self.mt.ORDER_FILLING_IOC if info.filling_mode&2 else self.mt.ORDER_FILLING_RETURN
         self.risk['scalp_signal']=signal_id;self.persist()
-        for i in range(3):
+        for i in range(count):
             # Re-check before every send; no automatic resend on uncertain outcome.
             a=self.hedge_account()
             current, pending=self._positions_orders()
@@ -169,16 +186,17 @@ class ScalpingBridge(DemoBridge):
                      comment='Scalp exit',type_time=self.mt.ORDER_TIME_GTC,type_filling=fill)
             self._send(req,'Fermeture')
             self.log('EXIT',ticket=str(p.ticket),detail='CHoCH ou limite quotidienne')
-        self.resume_after=time.time()+60
+        self.resume_after=time.time()+self.options['cooldown']
 
     def manage_break_even(self,positions,tick,info):
         step=float(info.trade_tick_size or info.point)
         for p in positions:
             if p.magic!=MAGIC_SCALP or p.symbol!=self.symbol or p.ticket in self.be_tickets: continue
             if not p.sl or not p.tp: raise ValueError('Une position du bot n’a pas de SL/TP : contrôle manuel requis.')
+            if not self.options['break_even']:continue
             buy=p.type==self.mt.ORDER_TYPE_BUY
             price=tick.bid if buy else tick.ask
-            if (buy and price < (p.price_open+p.tp)/2) or (not buy and price > (p.price_open+p.tp)/2): continue
+            if (buy and price < (p.price_open+(p.tp-p.price_open)*self.options['be_trigger'])) or (not buy and price > (p.price_open+(p.tp-p.price_open)*self.options['be_trigger'])): continue
             # Opening price only: commission and slippage may still produce a loss.
             sl=round((math.ceil(p.price_open/step) if buy else math.floor(p.price_open/step))*step,info.digits)
             if (buy and sl<=p.sl) or (not buy and sl>=p.sl): self.be_tickets.add(p.ticket);continue
@@ -220,7 +238,7 @@ class ScalpingBridge(DemoBridge):
             self.manage_break_even(own,tick,info)
             if own: self.had_owned=True
             elif self.had_owned:
-                self.had_owned=False;self.resume_after=time.time()+60;self.be_tickets.clear();self.previous_bid=None
+                self.had_owned=False;self.resume_after=time.time()+self.options['cooldown'];self.be_tickets.clear();self.previous_bid=None
             if own or ps or orders:
                 self.previous_bid=tick.bid;return
             tick_id=(getattr(tick,'time_msc',0),tick.time,tick.bid,tick.ask)
@@ -228,7 +246,7 @@ class ScalpingBridge(DemoBridge):
             self.quote_id=tick_id
             prev=self.previous_bid;self.previous_bid=tick.bid
             hour=datetime.now(timezone.utc).hour
-            if prev is None or time.time()<self.resume_after or not (13<=hour<17 or 0<=hour<5) or tick.ask-tick.bid>self.max_spread:return
+            if prev is None or time.time()<self.resume_after or not session_open(hour,self.options) or tick.ask-tick.bid>self.max_spread:return
             s=self.last_structure or {}; low=s.get('support'); high=s.get('resistance')
             if low is None or high is None or low>=high:return
             event=signal(prev,tick.bid,low,high,s['trend'],self.penetration,self.stop_distance)
@@ -284,7 +302,7 @@ class ScalpingBridge(DemoBridge):
     def snapshot(self):
         result=super().snapshot()
         if result.get('connected'):
-            result.update(strategy='Scalping expérimental XAUUSD M1',risk=.005,daily_loss=.02)
+            result.update(strategy='Scalping expérimental XAUUSD M1',risk=self.cfg.risk,daily_loss=self.cfg.daily_loss,strategy_settings=dict(self.options),strategy_settings_defaults=validate_settings({}))
             for p in result.get('positions',[]):
                 p['owned']=any(str(x.ticket)==p['ticket'] and x.magic==MAGIC_SCALP for x in (self.mt.positions_get() or []))
         return result

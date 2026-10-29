@@ -256,7 +256,7 @@ def dashboard():
     html = html.replace('<main id="dashboard">', '<main id="dashboard"><p class="hint">Compte MT5 hébergé · Démo uniquement · <a href="/logout">Déconnexion</a>. Déconnexion du site : le mode autonome peut continuer sur le serveur.</p>')
     html = html.replace('Recherche de structure M3','Recherche de structure M1').replace('Retest et rejet confirmés','Franchissement de liquidité').replace('Diagnostic du moteur · M3','Diagnostic du moteur · M1').replace('<b>M3</b>','<b>M1</b>')
     html = html.replace('id="risk" type="number" value="0.5"','id="risk" type="number" value="0.5" readonly').replace('id="daily" type="number" value="1"','id="daily" type="number" value="2" readonly').replace('<label>Ratio cible<input id="rr"','<label style="display:none">Ratio cible<input id="rr"')
-    html = html.replace('<main id="dashboard">', '<main id="dashboard"><p class="hint">Scalping expérimental M1 · risque prévu 0,5 % par série · arrêt journalier 2 % · horaires UTC 00–05 h et 13–17 h. Le SL peut être exécuté au-delà du prix prévu. Les paramètres sont expérimentaux.</p>')
+    html = html.replace('<main id="dashboard">', '<main id="dashboard"><p class="hint">Scalping expérimental XAUUSD M1 · Paramètres personnalisables dans Réglages. Le risque prévu peut être dépassé par les conditions d’exécution.</p>')
     return html.encode()
 
 
@@ -335,7 +335,7 @@ def handler(hub, proxy_key, origin):
                     if not self.headers.get('Content-Type', '').startswith('application/json'):
                         return self.reply(415, {'error': 'JSON requis.'})
                     request = json.loads(body)
-                    if not isinstance(request, dict) or request.get('action') not in ('start', 'stop', 'candles'):
+                    if not isinstance(request, dict) or request.get('action') not in ('start', 'stop', 'candles', 'settings'):
                         return self.reply(400, {'error': 'Commande indisponible. Utilise Deconnexion pour quitter ton compte.'})
                     if set(request) - {'action', 'id', 'symbol', 'config', 'supervision'}:
                         return self.reply(400, {'error': 'Parametres inconnus.'})
